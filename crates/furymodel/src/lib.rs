@@ -13,7 +13,9 @@
 //! - [`model`]: opening a model from its roots, and reading it with every
 //!   chunk verified; [`io`]: the reads, through the page cache or around
 //!   it; [`part`]: delivery parts.
+//! - [`diff`]: comparing two models.
 
+pub mod diff;
 mod error;
 pub mod hash;
 pub mod io;

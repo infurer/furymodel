@@ -4,10 +4,13 @@
 //! Fixtures of the tests: a tiny model with every kind of entry.
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::Path;
 
-use crate::hash::Algorithm;
-use crate::manifest::{Axis, Provenance, Source, SourceFile, Tool};
+use crate::hash::{Algorithm, FileHasher, HashTable};
+use crate::manifest::{
+    Axis, HASHES_DIR, MANIFEST_PATH, Manifest, Provenance, Source, SourceFile, Tool,
+};
 use crate::registry::{Dtype, Layout, Scheme};
 use crate::writer::{GroupId, GroupSpec, ModelInfo, TensorData, TensorSpec, Writer, Written};
 
@@ -191,4 +194,27 @@ pub fn write_tiny(root: &Path, reversed: bool) -> Written {
         algorithms().contains(&Algorithm::Gxhash3)
     );
     written
+}
+
+/// Replaces the hash tables of the model in `root` with tables of
+/// `algorithms` computed from its files as they are now, for tests that
+/// change a model's files behind its back.
+pub fn rehash(root: &Path, algorithms: &[Algorithm]) {
+    let json = fs::read(root.join(MANIFEST_PATH)).unwrap();
+    let (_, table) = Manifest::parse(&json).unwrap();
+    let _ = fs::remove_dir_all(root.join(HASHES_DIR));
+    fs::create_dir_all(root.join(HASHES_DIR)).unwrap();
+    for &algorithm in algorithms {
+        let digests = table
+            .entries()
+            .iter()
+            .map(|entry| {
+                let mut hasher = FileHasher::new(&[algorithm]).unwrap();
+                hasher.update(&fs::read(root.join(&entry.path)).unwrap());
+                hasher.finish().remove(0)
+            })
+            .collect();
+        let encoded = HashTable::new(algorithm, &table, digests).unwrap().encode();
+        fs::write(root.join(algorithm.table_path()), encoded).unwrap();
+    }
 }
