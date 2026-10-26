@@ -31,7 +31,7 @@ pub fn info() -> ModelInfo {
         schema_version: 1,
         config: serde_json::json!({"hidden": 32, "layers": 2, "eps": 1e-6}),
         provenance: Provenance {
-            source: Source {
+            sources: vec![Source {
                 kind: "synthetic".to_owned(),
                 repository: None,
                 revision: None,
@@ -40,7 +40,7 @@ pub fn info() -> ModelInfo {
                     size: 1234,
                     sha2_256: None,
                 }],
-            },
+            }],
             tool: Tool {
                 name: "furymodel tests".to_owned(),
                 version: "0".to_owned(),

@@ -73,7 +73,7 @@ fn sample() -> Manifest {
             role: "tokenizer".to_owned(),
         }],
         provenance: Provenance {
-            source: Source {
+            sources: vec![Source {
                 kind: "synthetic".to_owned(),
                 repository: None,
                 revision: None,
@@ -82,7 +82,7 @@ fn sample() -> Manifest {
                     size: 1,
                     sha2_256: Some("0".repeat(64)),
                 }],
-            },
+            }],
             tool: Tool {
                 name: "tests".to_owned(),
                 version: "0".to_owned(),
@@ -304,6 +304,17 @@ fn checks_paths_and_names() {
         .extensions
         .insert("draft".to_owned(), serde_json::json!(1));
     rejects(&manifest, "isn't namespaced");
+
+    let mut manifest = sample();
+    manifest.provenance.sources.clear();
+    rejects(&manifest, "provenance needs a source");
+
+    // Every source's files are checked, not only the first source's.
+    let mut manifest = sample();
+    let mut second = manifest.provenance.sources[0].clone();
+    second.files[0].sha2_256 = Some("0".repeat(63));
+    manifest.provenance.sources.push(second);
+    rejects(&manifest, "lowercase hex");
 }
 
 #[test]

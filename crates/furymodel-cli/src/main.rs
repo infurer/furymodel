@@ -586,21 +586,22 @@ fn info_storage(model: &Model, out: &mut dyn Write) -> io::Result<()> {
 fn info_provenance(model: &Model, out: &mut dyn Write) -> io::Result<()> {
     let manifest = model.manifest();
     let mut row = |key: &str, value: &str| writeln!(out, "{key:<12} {}", shown(value));
-    let source = &manifest.provenance.source;
-    let mut origin = source.kind.clone();
-    if let Some(repository) = &source.repository {
-        write!(origin, " from {repository}").expect("writing to a String");
+    for source in &manifest.provenance.sources {
+        let mut origin = source.kind.clone();
+        if let Some(repository) = &source.repository {
+            write!(origin, " from {repository}").expect("writing to a String");
+        }
+        if let Some(revision) = &source.revision {
+            write!(origin, " at {revision}").expect("writing to a String");
+        }
+        row(
+            "source",
+            &format!(
+                "{origin}, {}",
+                count(source.files.len() as u64, "file", "files")
+            ),
+        )?;
     }
-    if let Some(revision) = &source.revision {
-        write!(origin, " at {revision}").expect("writing to a String");
-    }
-    row(
-        "source",
-        &format!(
-            "{origin}, {}",
-            count(source.files.len() as u64, "file", "files")
-        ),
-    )?;
     let tool = &manifest.provenance.tool;
     row("tool", &format!("{} {}", tool.name, tool.version))?;
     for transform in &manifest.provenance.transforms {

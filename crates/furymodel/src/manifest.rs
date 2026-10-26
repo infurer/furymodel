@@ -269,8 +269,8 @@ pub struct AuxEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Provenance {
-    /// The source the tensors were converted from.
-    pub source: Source,
+    /// The sources the tensors were converted from, at least one.
+    pub sources: Vec<Source>,
     /// The program that wrote the model.
     pub tool: Tool,
     /// Every transform applied on the way, in order.
@@ -1170,15 +1170,19 @@ pub(crate) fn check_unique_keys(bytes: &[u8]) -> Result<(), serde_json::Error> {
 }
 
 fn check_provenance(provenance: &Provenance) -> Result<()> {
-    if provenance.source.kind.is_empty()
+    if provenance.sources.is_empty()
+        || provenance
+            .sources
+            .iter()
+            .any(|source| source.kind.is_empty())
         || provenance.tool.name.is_empty()
         || provenance.tool.version.is_empty()
     {
         return Err(invalid(
-            "provenance needs a source kind and the tool's name and version",
+            "provenance needs a source, each with a kind, and the tool's name and version",
         ));
     }
-    for file in &provenance.source.files {
+    for file in provenance.sources.iter().flat_map(|source| &source.files) {
         let valid_sha = file.sha2_256.as_ref().is_none_or(|sha| {
             sha.len() == 64
                 && sha

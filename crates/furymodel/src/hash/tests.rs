@@ -214,7 +214,7 @@ fn table() -> (FileTable, Vec<Vec<u8>>) {
         "groups": [],
         "aux": [{"path": "aux/vocab.txt", "size": 3, "role": "vocab"}],
         "provenance": {
-            "source": {"kind": "synthetic", "files": []},
+            "sources": [{"kind": "synthetic", "files": []}],
             "tool": {"name": "tests", "version": "0"},
             "transforms": [],
             "notes": [],
@@ -342,16 +342,16 @@ fn format_golden_vectors() {
         .unwrap();
     assert_eq!(
         hex(Algorithm::Sha256, &xxh3.encode()),
-        "da89bb9e1e4e21ce7e11bde0bf960282363bf536cdaf357048e0f89d507d4836"
+        "acac78097c328085bc376bb5a553bd06a5126c13992c6fe5b6805ef8f4f13ead"
     );
     assert_eq!(
         hex(Algorithm::Sha256, &sha512.encode()),
-        "440dbc7826e57600841bacffc53ffa0362dea222325e04b492e313f473d11622"
+        "cd0352b363d80296f9b7026a0b95dac37b8a0048c9095170cd64b3872053f98f"
     );
     let id = ContentId::compute(&table, sha3).unwrap();
     assert_eq!(
         id.to_string(),
-        "e5e150920af3e45d0888422c1e0f3253f788055a9d52a0a00649520aed6daf06de484cf1b6ab1190da116906c30452764ce35a140af89c8d3eb5eade88534d22"
+        "2eedf57dd684c797fc75ac99a0192ff1964c80e9a53cecd3400c0f25b890793a6029be550bb0163ae24aff344f2371d0567973fd5b6ae344ea9da6acf4b7872c"
     );
     assert_eq!(id.short(), id.to_string()[..16]);
     assert_eq!(ContentId::from_hex(&id.to_string()), Some(id));

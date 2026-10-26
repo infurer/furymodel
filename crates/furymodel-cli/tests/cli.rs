@@ -29,12 +29,12 @@ fn write_named(root: &Path, weights: u8, name: &str) {
         schema_version: 1,
         config: serde_json::json!({"hidden": 16}),
         provenance: Provenance {
-            source: Source {
+            sources: vec![Source {
                 kind: "synthetic".to_owned(),
                 repository: Some("example/cli".to_owned()),
                 revision: Some("abc".to_owned()),
                 files: vec![],
-            },
+            }],
             tool: Tool {
                 name: "furymodel-cli tests".to_owned(),
                 version: "0".to_owned(),

@@ -154,19 +154,21 @@ A role isn't empty.
 
 ### 2.7 Provenance
 
-| Field        | Type             | Meaning                                                  |
-| ------------ | ---------------- | -------------------------------------------------------- |
-| `source`     | object           | the source the tensors were converted from               |
-| `tool`       | object           | `{"name": …, "version": …}` of the program that wrote it |
-| `transforms` | array of strings | every transform applied on the way, in order             |
-| `notes`      | array of strings | anything else a reader of the provenance should know     |
+| Field        | Type             | Meaning                                                   |
+| ------------ | ---------------- | --------------------------------------------------------- |
+| `sources`    | array of objects | the sources the tensors were converted from, at least one |
+| `tool`       | object           | `{"name": …, "version": …}` of the program that wrote it  |
+| `transforms` | array of strings | every transform applied on the way, in order              |
+| `notes`      | array of strings | anything else a reader of the provenance should know      |
 
-`source` is `{"kind": KIND, "files": [...]}` with optional `repository`
+A source is `{"kind": KIND, "files": [...]}` with optional `repository`
 and `revision` strings: KIND names the source format (for example
 `safetensors`), and each entry of `files` is `{"path": …, "size": …}` with
 an optional `sha2-256`, the SHA-256 of the source file in 64 lowercase hex
-digits (the LFS object id on Hugging Face). The source's kind, a source
-file's path and the tool's name and version aren't empty.
+digits (the LFS object id on Hugging Face). A model converted from several
+sources, such as a model and its drafter published separately, lists each
+of them. A source's kind, a source file's path and the tool's name and
+version aren't empty.
 
 Transforms must only rearrange bytes: splitting, stacking, reordering
 tensors or changing their layout. A conversion that changes values is not a
