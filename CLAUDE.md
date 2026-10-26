@@ -43,6 +43,7 @@ nix develop                # rust-toolchain.toml's toolchain, cargo-nextest, reu
 nix build .#checks.aarch64-darwin.clippy   # warnings as errors
 nix build .#checks.aarch64-darwin.nextest
 nix build .#checks.aarch64-darwin.msrv     # nixpkgs' rustc and cargo
+nix run .#furymodel-cli -- info ROOT...   # or verify, hash add, split, diff
 nix fmt
 nix flake check --all-systems --no-update-lock-file
 ```
@@ -75,7 +76,9 @@ nix fmt && git diff --exit-code &&
   aarch64-linux and aarch64-darwin.
 - `Cargo.toml`: the workspace, its shared package fields, dependencies and
   lints; `crates/furymodel`: the library, whose modules follow SPEC.md's
-  sections (the crate documentation lists them).
+  sections (the crate documentation lists them), with the tests' fixture
+  model in `src/testing.rs`; `crates/furymodel-cli`: the command line tool
+  (info, verify, hash add, split, diff), tested end to end in `tests/`.
 - `rust-toolchain.toml`: rust-overlay's stable as of `flake.lock`;
   `clippy.toml`: the disallowed macros and methods; `.cargo/config.toml`:
   AES instructions for the Linux targets, which gxhash needs at compile
@@ -87,13 +90,15 @@ nix fmt && git diff --exit-code &&
   `cargoArtifacts` every Rust check reuses), `checks.nix` (clippy and
   rustdoc with warnings as errors, nextest, nextest again built without AES
   instructions, `msrv`: every target built with nixpkgs' own rustc and
-  cargo, `reuse lint`), `devshell.nix` and `treefmt.nix` (`nix fmt` and
+  cargo, `reuse lint`), `package.nix` (`packages.furymodel-cli`, the
+  default), `devshell.nix` and `treefmt.nix` (`nix fmt` and
   `checks.treefmt`).
 - `.gitlab-ci.yml`: GitLab CI on x86_64-linux runners. `checks` runs
   `nix flake check --all-systems`, which builds x86_64-linux's checks;
-  `cargo` runs `cargo build` inside `nix develop`, the build outside Nix;
-  `publish-github`, on master once those passed, pushes master to the public
-  GitHub repository.
+  `packages` builds the packages of x86_64-linux and aarch64-linux, listed
+  by hand; `cargo` runs `cargo build` inside `nix develop`, the build
+  outside Nix; `publish-github`, on master once those passed, pushes master
+  to the public GitHub repository.
 
 ## Conventions
 

@@ -3,7 +3,7 @@
 
 [workspace]
 resolver = "3"
-members = ["crates/furymodel"]
+members = ["crates/furymodel", "crates/furymodel-cli"]
 
 [workspace.package]
 version = "0.2.0"
@@ -16,7 +16,10 @@ authors = ["Mika Tammi <mikatammi@gmail.com>"]
 rust-version = "1.95"
 
 [workspace.dependencies]
+anyhow = "1"
 blake3 = "1"
+clap = { version = "4", features = ["derive"] }
+furymodel = { path = "crates/furymodel", version = "0.2.0" }
 gxhash = "3"
 rustix = { version = "1", features = ["fs", "mm", "param"] }
 serde = { version = "1", features = ["derive"] }

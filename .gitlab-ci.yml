@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Mika Tammi
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
-# GitLab CI on x86_64-linux runners: the flake's checks, the build outside
-# Nix, and on master a push to the public GitHub repository.
+# GitLab CI on x86_64-linux runners: the flake's checks, its packages, the
+# build outside Nix, and on master a push to the public GitHub repository.
 stages:
   - ci
   - publish
@@ -13,6 +13,13 @@ checks:
   interruptible: true
   script:
     - nix flake check --all-systems --no-update-lock-file -L
+# The packages, listed by hand: x86_64-linux's built on the runner,
+# aarch64-linux's on its remote builder.
+packages:
+  stage: ci
+  interruptible: true
+  script:
+    - nix build --no-link --no-update-lock-file -L .#packages.x86_64-linux.furymodel-cli .#packages.aarch64-linux.furymodel-cli
 # The build outside Nix: cargo in the dev shell, with the dependencies from
 # crates.io, as a user of the crate builds it.
 cargo:

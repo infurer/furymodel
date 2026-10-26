@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Mika Tammi
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "furymodel-cli"
+description = "Describe, verify, extend, split and compare FuryModel models"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+furymodel.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
