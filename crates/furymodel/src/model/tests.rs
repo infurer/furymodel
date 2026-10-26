@@ -426,6 +426,40 @@ fn locates_tensors_to_read() {
 }
 
 #[test]
+fn adds_a_hash_table() {
+    let dir = tempfile::tempdir().unwrap();
+    write_tiny(dir.path(), false);
+    let path = dir.path().join(Algorithm::Blake3.table_path());
+    let original = fs::read(&path).unwrap();
+    fs::remove_file(&path).unwrap();
+
+    let model = Model::open(&[dir.path()]).unwrap();
+    assert!(model.hash_table(Algorithm::Blake3).is_none());
+    let error = model
+        .add_table(
+            Algorithm::Blake3,
+            &dir.path().join("x"),
+            CacheMode::Use,
+            2,
+            &|_| {},
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("isn't one of"), "{error}");
+    let added = model
+        .add_table(Algorithm::Blake3, dir.path(), CacheMode::Bypass, 2, &|_| {})
+        .unwrap();
+    assert_eq!(added, path);
+    assert_eq!(fs::read(&path).unwrap(), original);
+
+    let model = Model::open(&[dir.path()]).unwrap();
+    assert!(model.hash_table(Algorithm::Blake3).is_some());
+    let error = model
+        .add_table(Algorithm::Blake3, dir.path(), CacheMode::Use, 2, &|_| {})
+        .unwrap_err();
+    assert!(error.to_string().contains("already"), "{error}");
+}
+
+#[test]
 fn checks_hash_tables() {
     let dir = tempfile::tempdir().unwrap();
     write_tiny(dir.path(), false);
@@ -527,6 +561,77 @@ fn opens_no_model_with_a_bad_table() {
         }
         other => panic!("{other:?}"),
     }
+}
+
+// A table added later vouches only for bytes the model's tables vouch for:
+// a payload changed behind the model's back fails the addition, and no
+// table is written.
+#[test]
+fn adds_no_table_of_unverified_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    write_tiny(dir.path(), false);
+    let sha3 = dir.path().join(Algorithm::Sha3.table_path());
+    fs::remove_file(&sha3).unwrap();
+    let path = "layers/00/experts/01.bin";
+    let full = dir.path().join(path);
+    let mut contents = fs::read(&full).unwrap();
+    contents[100] ^= 1;
+    fs::write(&full, &contents).unwrap();
+
+    let model = Model::open(&[dir.path()]).unwrap();
+    let error = model
+        .add_table(Algorithm::Sha3, dir.path(), CacheMode::Use, 3, &|_| {})
+        .unwrap_err();
+    match &error {
+        Error::Mismatch {
+            path: found,
+            algorithm,
+            ..
+        } => {
+            assert_eq!(found, path);
+            assert_eq!(*algorithm, model.verifier().unwrap());
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(!sha3.exists());
+    let left: Vec<_> = fs::read_dir(dir.path().join("hashes"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name.contains(".partial"))
+        .collect();
+    assert_eq!(left, Vec::<String>::new());
+}
+
+// A table's file appears whole or not at all: a write cut short leaves a
+// file of its own, which opening ignores and a later addition leaves as it
+// is, writing into one of its own.
+#[test]
+fn adds_tables_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    write_tiny(dir.path(), false);
+    let path = dir.path().join(Algorithm::Blake3.table_path());
+    let original = fs::read(&path).unwrap();
+    fs::remove_file(&path).unwrap();
+    let partial = dir
+        .path()
+        .join(format!("{}.partial-1-0", Algorithm::Blake3.table_path()));
+    fs::write(&partial, &original[..100]).unwrap();
+
+    let model = Model::open(&[dir.path()]).unwrap();
+    assert!(model.hash_table(Algorithm::Blake3).is_none());
+    model
+        .add_table(Algorithm::Blake3, dir.path(), CacheMode::Use, 2, &|_| {})
+        .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), original);
+    assert_eq!(fs::read(&partial).unwrap(), &original[..100]);
+    let left = fs::read_dir(dir.path().join("hashes"))
+        .unwrap()
+        .filter(|entry| {
+            let name = entry.as_ref().unwrap().file_name();
+            name.to_string_lossy().contains(".partial")
+        })
+        .count();
+    assert_eq!(left, 1);
 }
 
 // Nothing of a model with no table this build can compute is used, the

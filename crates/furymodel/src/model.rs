@@ -9,15 +9,17 @@ use std::fs;
 use std::io;
 use std::ops::{Deref, Range};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::error::{Error, IoContext as _, Result};
-use crate::hash::{Algorithm, CHUNK_SIZE, ContentId, FileHasher, HashTable, chunk_count};
+use crate::hash::{
+    Algorithm, CHUNK_SIZE, ContentId, FileDigests, FileHasher, HashTable, chunk_count,
+};
 use crate::io::{AlignedBuf, CacheMode, DIRECT_ALIGNMENT, ReadFile};
-use crate::manifest::{EntryKind, FileTable, MANIFEST_PATH, Manifest, PART_PATH};
+use crate::manifest::{EntryKind, FileTable, HASHES_DIR, MANIFEST_PATH, Manifest, PART_PATH};
 use crate::part::Part;
+use crate::writer::{sync_dir, write_new};
 
 /// A complete model, opened from one or more roots.
 #[derive(Debug)]
@@ -305,18 +307,135 @@ impl Model {
         threads: usize,
         progress: &(dyn Fn(u64) + Sync),
     ) -> Result<Vec<Mismatch>> {
-        for &algorithm in algorithms {
-            self.hash_table(algorithm)
-                .ok_or(Error::NoTable(algorithm))?;
-            if !algorithm.is_supported() {
-                return Err(Error::NoVerifier(format!(
-                    "this build can't compute {algorithm}: gxhash needs AES instructions"
-                )));
+        let tables = algorithms
+            .iter()
+            .map(|&algorithm| self.hash_table(algorithm).ok_or(Error::NoTable(algorithm)))
+            .collect::<Result<Vec<_>>>()?;
+        let digests = self.digests(algorithms, mode, threads, progress, None)?;
+        let mut mismatches = Vec::new();
+        for (file, digests) in digests.iter().enumerate() {
+            let path = &self.table.entries()[file].path;
+            for (digests, table) in digests.iter().zip(&tables) {
+                let algorithm = digests.algorithm;
+                for (chunk, (computed, stored)) in
+                    digests.chunks.iter().zip(table.chunks(file)).enumerate()
+                {
+                    if computed != stored {
+                        mismatches.push(Mismatch {
+                            path: path.clone(),
+                            algorithm,
+                            chunk: Some(chunk as u64),
+                        });
+                    }
+                }
+                if &digests.file != table.file(file) {
+                    mismatches.push(Mismatch {
+                        path: path.clone(),
+                        algorithm,
+                        chunk: None,
+                    });
+                }
             }
+        }
+        mismatches.sort();
+        Ok(mismatches)
+    }
+
+    /// Computes the table of `algorithm`, which the model doesn't have yet,
+    /// from its files, and writes it into `root`, one of the model's roots.
+    /// The files are read in `mode` as [`Model::verify`] reads them, and
+    /// every file is checked as it is read against a table the model has,
+    /// the one chunks are verified with if there is one, so that the new
+    /// table never vouches for bytes the model's others don't; the table is
+    /// written whole or not at all. Opening the model again finds it. The
+    /// table goes into `root` alone: a model in parts has every table in
+    /// every part (section 7 of the specification), so it belongs in the
+    /// other parts' roots too.
+    ///
+    /// # Errors
+    ///
+    /// If the model has the table already, `root` isn't one of its roots,
+    /// this build doesn't support the algorithm, a file doesn't match the
+    /// model's table ([`Error::Mismatch`]), or reading or writing fails.
+    pub fn add_table(
+        &self,
+        algorithm: Algorithm,
+        root: &Path,
+        mode: CacheMode,
+        threads: usize,
+        progress: &(dyn Fn(u64) + Sync),
+    ) -> Result<PathBuf> {
+        if self.hash_table(algorithm).is_some() {
+            return Err(Error::Usage(format!(
+                "the model has a {algorithm} table already"
+            )));
+        }
+        if !self.roots.iter().any(|known| known == root) {
+            return Err(Error::Usage(format!(
+                "{} isn't one of the model's roots",
+                root.display()
+            )));
+        }
+        let check = self
+            .verifier()
+            .ok()
+            .and_then(|algorithm| self.hash_table(algorithm))
+            .or_else(|| {
+                self.tables
+                    .iter()
+                    .find(|table| table.algorithm().is_supported())
+            })
+            .ok_or_else(|| {
+                Error::Unverifiable("it has no table this build can compute".to_owned())
+            })?;
+        let digests = self
+            .digests(
+                &[algorithm, check.algorithm()],
+                mode,
+                threads,
+                progress,
+                Some(check),
+            )?
+            .into_iter()
+            .map(|mut digests| digests.remove(0))
+            .collect();
+        let path = root.join(algorithm.table_path());
+        let table =
+            HashTable::new(algorithm, &self.table, digests).map_err(|source| Error::HashTable {
+                path: path.clone(),
+                source,
+            })?;
+        let hashes = root.join(HASHES_DIR);
+        fs::create_dir_all(&hashes).at(&hashes)?;
+        write_new(&path, &table.encode())?;
+        sync_dir(root)?;
+        Ok(path)
+    }
+
+    /// Every file's digests by `algorithms`, in file-table order, computed
+    /// with `threads` threads; with `check`, the table of one of them, each
+    /// file's digests by its algorithm must match it, or the first that
+    /// doesn't stops them all.
+    fn digests(
+        &self,
+        algorithms: &[Algorithm],
+        mode: CacheMode,
+        threads: usize,
+        progress: &(dyn Fn(u64) + Sync),
+        check: Option<&HashTable>,
+    ) -> Result<Vec<Vec<FileDigests>>> {
+        if let Some(&algorithm) = algorithms
+            .iter()
+            .find(|algorithm| !algorithm.is_supported())
+        {
+            return Err(Error::NoVerifier(format!(
+                "{algorithm} can't be computed here: gxhash3-128 needs AES instructions, as \
+                 target features of the build and in the CPU"
+            )));
         }
         let next = AtomicUsize::new(0);
         let failed = AtomicBool::new(false);
-        let mismatches = Mutex::new(Vec::new());
+        let results = Mutex::new(vec![Vec::new(); self.table.len()]);
         let error = Mutex::new(None);
         std::thread::scope(|scope| {
             for _ in 0..threads.clamp(1, self.table.len()) {
@@ -327,8 +446,16 @@ impl Model {
                         if file >= self.table.len() {
                             break;
                         }
-                        match self.verify_file(file, algorithms, mode, &mut buffer, progress) {
-                            Ok(found) => lock(&mismatches).extend(found),
+                        let digests = self
+                            .digest_file(file, algorithms, mode, &mut buffer, progress)
+                            .and_then(|digests| {
+                                if let Some(table) = check {
+                                    self.check_digests(file, &digests, table)?;
+                                }
+                                Ok(digests)
+                            });
+                        match digests {
+                            Ok(digests) => lock(&results)[file] = digests,
                             Err(found) => {
                                 failed.store(true, Ordering::Relaxed);
                                 lock(&error).get_or_insert(found);
@@ -338,27 +465,51 @@ impl Model {
                 });
             }
         });
-        if let Some(error) = error
-            .into_inner()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-        {
-            return Err(error);
+        match error.into_inner().unwrap_or_else(PoisonError::into_inner) {
+            Some(error) => Err(error),
+            None => Ok(results.into_inner().unwrap_or_else(PoisonError::into_inner)),
         }
-        let mut mismatches = mismatches
-            .into_inner()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        mismatches.sort();
-        Ok(mismatches)
     }
 
-    fn verify_file(
+    // Checks the file of index `file`'s digests by `table`'s algorithm,
+    // among `digests`, against `table`.
+    fn check_digests(&self, file: usize, digests: &[FileDigests], table: &HashTable) -> Result<()> {
+        let algorithm = table.algorithm();
+        let path = &self.table.entries()[file].path;
+        let computed = digests
+            .iter()
+            .find(|digests| digests.algorithm == algorithm)
+            .ok_or(Error::NoTable(algorithm))?;
+        if let Some(chunk) = computed
+            .chunks
+            .iter()
+            .zip(table.chunks(file))
+            .position(|(computed, stored)| computed != stored)
+        {
+            return Err(Error::Mismatch {
+                path: path.clone(),
+                chunk: Some(chunk as u64),
+                algorithm,
+            });
+        }
+        if &computed.file != table.file(file) {
+            return Err(Error::Mismatch {
+                path: path.clone(),
+                chunk: None,
+                algorithm,
+            });
+        }
+        Ok(())
+    }
+
+    fn digest_file(
         &self,
         file: usize,
         algorithms: &[Algorithm],
         mode: CacheMode,
         buffer: &mut AlignedBuf,
         progress: &(dyn Fn(u64) + Sync),
-    ) -> Result<Vec<Mismatch>> {
+    ) -> Result<Vec<FileDigests>> {
         let entry = &self.table.entries()[file];
         let path = self.path(file);
         let mode = match entry.kind {
@@ -381,39 +532,19 @@ impl Model {
             offset += len as u64;
             progress(len as u64);
         }
-        let mut mismatches = Vec::new();
-        for digests in hasher.finish() {
-            let algorithm = digests.algorithm;
-            let table = self
-                .hash_table(algorithm)
-                .ok_or(Error::NoTable(algorithm))?;
-            for (chunk, (computed, stored)) in
-                digests.chunks.iter().zip(table.chunks(file)).enumerate()
-            {
-                if computed != stored {
-                    mismatches.push(Mismatch {
-                        path: entry.path.clone(),
-                        algorithm,
-                        chunk: Some(chunk as u64),
-                    });
-                }
-            }
-            if &digests.file != table.file(file) {
-                mismatches.push(Mismatch {
-                    path: entry.path.clone(),
-                    algorithm,
-                    chunk: None,
-                });
-            }
-        }
-        Ok(mismatches)
+        // In the order of `algorithms`, which FileHasher doesn't keep.
+        let mut digests = hasher.finish();
+        digests.sort_by_key(|digests| {
+            algorithms
+                .iter()
+                .position(|&algorithm| algorithm == digests.algorithm)
+        });
+        Ok(digests)
     }
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn read_manifest(root: &Path) -> Result<Vec<u8>> {
