@@ -3,9 +3,16 @@
 
 //! FuryModel: a model file format laid out for streaming layers and experts
 //! from disk, and its library. The format is specified in [`spec`], the
-//! crate's `SPEC.md`.
+//! crate's `SPEC.md`; this crate's modules follow its sections.
 //!
-//! The reader, the writer and the verification are added module by module.
+//! - [`manifest`]: the manifest, `furymodel.json`, and the file table it
+//!   defines.
+//! - [`registry`]: the dtypes, layouts and schemes a manifest may name.
 
+pub mod manifest;
+pub mod registry;
 #[doc = include_str!("../SPEC.md")]
 pub mod spec {}
+
+pub use manifest::{FileTable, Manifest, ManifestError};
+pub use registry::{Dtype, Layout, Scheme};

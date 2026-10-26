@@ -73,8 +73,9 @@ nix fmt && git diff --exit-code &&
   `format_version` where its section 9 says so.
 - `flake.nix`: flake-parts on nixos-26.05; systems x86_64-linux,
   aarch64-linux and aarch64-darwin.
-- `Cargo.toml`: the workspace, its shared package fields and lints;
-  `crates/furymodel`: the library.
+- `Cargo.toml`: the workspace, its shared package fields, dependencies and
+  lints; `crates/furymodel`: the library, whose modules follow SPEC.md's
+  sections (the crate documentation lists them).
 - `rust-toolchain.toml`: rust-overlay's stable as of `flake.lock`;
   `clippy.toml`: the disallowed macros and methods.
 - `nix/`: `rust.nix` (the toolchain and crane: one `buildDepsOnly` whose
