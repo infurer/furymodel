@@ -21,6 +21,9 @@ sha3.workspace = true
 thiserror.workspace = true
 xxhash-rust.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 # gxhash needs AES (and SSE2 or NEON) at compile time; without them the
 # crate leaves gxhash3-128 out. The condition must stay hash::GXHASH's.
 [target.'cfg(any(all(target_arch = "x86_64", target_feature = "aes", target_feature = "sse2"), all(target_arch = "aarch64", target_feature = "aes", target_feature = "neon")))'.dependencies]

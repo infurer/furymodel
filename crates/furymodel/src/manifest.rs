@@ -200,6 +200,16 @@ impl Axis {
         }
     }
 
+    /// Whether `value` is one of the axis's values.
+    #[must_use]
+    pub fn contains(&self, value: u64) -> bool {
+        match (&self.count, &self.values) {
+            (Some(count), _) => value < *count,
+            (None, Some(values)) => values.binary_search(&value).is_ok(),
+            (None, None) => false,
+        }
+    }
+
     /// The axis's `index`-th value.
     fn value(&self, index: u64) -> u64 {
         match &self.values {
@@ -714,7 +724,12 @@ fn check_tags(what: &str, tags: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn check_payload(what: &str, size: u64, tags: &[String], tensors: &[TensorEntry]) -> Result<()> {
+pub(crate) fn check_payload(
+    what: &str,
+    size: u64,
+    tags: &[String],
+    tensors: &[TensorEntry],
+) -> Result<()> {
     if !size.is_multiple_of(ALIGNMENT) {
         return Err(invalid(format!(
             "{what}: size {size} isn't a multiple of {ALIGNMENT}"
@@ -766,7 +781,7 @@ fn check_payload(what: &str, size: u64, tags: &[String], tensors: &[TensorEntry]
     Ok(())
 }
 
-fn check_group(group: &GroupEntry) -> Result<()> {
+pub(crate) fn check_group(group: &GroupEntry) -> Result<()> {
     if group.name.len() > MAX_GROUP_NAME_LEN {
         return Err(invalid(format!(
             "group {:?}… has a name longer than {MAX_GROUP_NAME_LEN} bytes",
@@ -1194,7 +1209,7 @@ fn check_extension_key(key: &str) -> Result<()> {
 
 /// A path or name template of a group.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Template {
+pub(crate) struct Template {
     pieces: Vec<Piece>,
 }
 
@@ -1205,7 +1220,7 @@ enum Piece {
 }
 
 impl Template {
-    fn parse(template: &str, axes: &[Axis]) -> std::result::Result<Self, String> {
+    pub(crate) fn parse(template: &str, axes: &[Axis]) -> std::result::Result<Self, String> {
         let mut pieces = Vec::new();
         let mut rest = template;
         while let Some(open) = rest.find(['{', '}']) {
@@ -1302,7 +1317,7 @@ impl Template {
             .fold(0, u64::saturating_add)
     }
 
-    fn render(&self, values: &[u64]) -> String {
+    pub(crate) fn render(&self, values: &[u64]) -> String {
         let mut rendered = String::new();
         for piece in &self.pieces {
             match piece {
