@@ -115,14 +115,14 @@ const PART_JSON_ALLOWANCE: u64 = 16 * 1024;
 ///
 /// # Errors
 ///
-/// If the model has no sha2-512 table, for the content id `part.json`
+/// If the model has no sha3-512 table, for the content id `part.json`
 /// names, or no table to verify chunks with ([`Error::NoVerifier`]); a
 /// file doesn't fit a part next to the manifest and the hash
 /// tables; `out` isn't empty; a file doesn't match the model's table as it
 /// is copied ([`Error::Mismatch`]); or writing fails.
 pub fn split(model: &Model, max_part_size: u64, out: &Path) -> Result<Vec<PathBuf>> {
     let content_id = model.content_id().ok_or_else(|| {
-        Error::Usage("splitting needs the sha2-512 table, for the parts' content id".to_owned())
+        Error::Usage("splitting needs the sha3-512 table, for the parts' content id".to_owned())
     })?;
     let table = model.table();
     let manifest = table

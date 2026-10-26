@@ -463,7 +463,7 @@ fn adds_a_hash_table() {
 fn checks_hash_tables() {
     let dir = tempfile::tempdir().unwrap();
     write_tiny(dir.path(), false);
-    let path = dir.path().join(Algorithm::Sha3.table_path());
+    let path = dir.path().join(Algorithm::Sha512.table_path());
     let mut bytes = fs::read(&path).unwrap();
     bytes[140] ^= 1;
     fs::write(&path, &bytes).unwrap();
@@ -487,6 +487,11 @@ fn checks_hash_tables() {
         .verify(&[Algorithm::Xxh3], CacheMode::Use, 1, &|_| {})
         .unwrap_err();
     assert!(matches!(error, Error::NoTable(Algorithm::Xxh3)), "{error}");
+
+    // The content id needs the sha3-512 table.
+    fs::remove_file(dir.path().join(Algorithm::Sha3.table_path())).unwrap();
+    let model = Model::open(&[dir.path()]).unwrap();
+    assert!(model.content_id().is_none());
 }
 
 // Flips a bit of a table's digests, which its checksum then doesn't match.

@@ -332,22 +332,26 @@ fn format_golden_vectors() {
         .iter()
         .find(|table| table.algorithm() == Algorithm::Sha512)
         .unwrap();
+    let sha3 = tables
+        .iter()
+        .find(|table| table.algorithm() == Algorithm::Sha3)
+        .unwrap();
     let xxh3 = tables
         .iter()
         .find(|table| table.algorithm() == Algorithm::Xxh3)
         .unwrap();
     assert_eq!(
         hex(Algorithm::Sha256, &xxh3.encode()),
-        "e19042b98b7e71bf28c030c8fd8baaf947149f0546c4bc9aac6627361266890d"
+        "da89bb9e1e4e21ce7e11bde0bf960282363bf536cdaf357048e0f89d507d4836"
     );
     assert_eq!(
         hex(Algorithm::Sha256, &sha512.encode()),
-        "0d99fd45ab72022990fe7ed44892fa688120dc5944f13b8068304dead1f2496b"
+        "440dbc7826e57600841bacffc53ffa0362dea222325e04b492e313f473d11622"
     );
-    let id = ContentId::compute(&table, sha512).unwrap();
+    let id = ContentId::compute(&table, sha3).unwrap();
     assert_eq!(
         id.to_string(),
-        "eedb450b838f27eead04bd133be34d736d772cdfbb2b8e4eb5a0507f8d6207f6b83afc7b1832a6348f7573b7a22eafb487cab3cba6a534e748cfcca0ac29df7f"
+        "e5e150920af3e45d0888422c1e0f3253f788055a9d52a0a00649520aed6daf06de484cf1b6ab1190da116906c30452764ce35a140af89c8d3eb5eade88534d22"
     );
     assert_eq!(id.short(), id.to_string()[..16]);
     assert_eq!(ContentId::from_hex(&id.to_string()), Some(id));
@@ -362,16 +366,17 @@ fn format_golden_vectors() {
         assert_eq!(ContentId::from_hex(&bad), None, "{bad}");
     }
     assert!(ContentId::compute(&table, xxh3).is_err());
+    assert!(ContentId::compute(&table, sha512).is_err());
 }
 
-// A content id comes only from the sha2-512 table of the very files it
+// A content id comes only from the sha3-512 table of the very files it
 // names: a table of another file table of as many files is refused.
 #[test]
 fn content_id_needs_its_own_files_table() {
     let (table, contents) = table();
-    let sha512 = tables(&table, &contents)
+    let sha3 = tables(&table, &contents)
         .into_iter()
-        .find(|table| table.algorithm() == Algorithm::Sha512)
+        .find(|table| table.algorithm() == Algorithm::Sha3)
         .unwrap();
     let other = {
         let mut json: serde_json::Value = serde_json::from_slice(&contents[1]).unwrap();
@@ -381,7 +386,7 @@ fn content_id_needs_its_own_files_table() {
             .1
     };
     assert_eq!(other.len(), table.len());
-    let error = ContentId::compute(&other, &sha512).unwrap_err();
+    let error = ContentId::compute(&other, &sha3).unwrap_err();
     assert!(error.to_string().contains("of these files"), "{error}");
-    ContentId::compute(&table, &sha512).unwrap();
+    ContentId::compute(&table, &sha3).unwrap();
 }

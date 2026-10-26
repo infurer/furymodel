@@ -107,7 +107,7 @@ pub struct Written {
     pub manifest: Manifest,
     /// The model's file table.
     pub table: FileTable,
-    /// The model's content id, if the sha2-512 table was among those written.
+    /// The model's content id, if the sha3-512 table was among those written.
     pub content_id: Option<ContentId>,
 }
 
@@ -600,7 +600,7 @@ impl Writer {
                     path: path.clone(),
                     source,
                 })?;
-            if algorithm == Algorithm::Sha512 {
+            if algorithm == Algorithm::Sha3 {
                 content_id = Some(ContentId::compute(&table, &hash_table).map_err(|source| {
                     Error::HashTable {
                         path: path.clone(),

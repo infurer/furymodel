@@ -331,12 +331,12 @@ fn verify(
         }
     )?;
     if let (true, Some(id)) = (
-        mismatches.is_empty() && algorithms.contains(&Algorithm::Sha512),
+        mismatches.is_empty() && algorithms.contains(&Algorithm::Sha3),
         model.content_id(),
     ) {
         writeln!(
             out,
-            "content id {id}: the files', as the sha2-512 table matches them; authentic if a \
+            "content id {id}: the files', as the sha3-512 table matches them; authentic if a \
              source you trust names it"
         )?;
     }
@@ -449,8 +449,8 @@ fn info(model: &Model, out: &mut dyn Write) -> io::Result<()> {
     row(
         "content id",
         &model.content_id().map_or_else(
-            || "unknown: the model has no sha2-512 table".to_owned(),
-            |id| format!("{id}, as the sha2-512 table claims"),
+            || "unknown: the model has no sha3-512 table".to_owned(),
+            |id| format!("{id}, as the sha3-512 table claims"),
         ),
     )?;
     let payloads = table

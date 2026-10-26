@@ -36,7 +36,7 @@ fn writes_a_model_whose_tables_match_its_files() {
             assert_eq!(hash_table.file(index), &digests.file, "{}", entry.path);
             assert_eq!(hash_table.chunks(index), digests.chunks.as_slice());
         }
-        if algorithm == Algorithm::Sha512 {
+        if algorithm == Algorithm::Sha3 {
             assert_eq!(
                 Some(ContentId::compute(&table, &hash_table).unwrap()),
                 written.content_id

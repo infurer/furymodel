@@ -263,9 +263,10 @@ reads, which for XXH3-128 is xxHash's canonical form.
 gxhash3-128 and xxh3-128 are the fast checks. They detect corruption, not
 tampering. gxhash's output is stable only within its major version 3, which
 the id pins, and it needs AES instructions; xxh3-128 is the portable one.
-sha2-512 and sha3-512 are the cryptographic standards a model is audited
-and identified with, blake3 is the fast cryptographic hash, and sha2-256
-the one that other tools (Nix, Hugging Face) speak.
+sha3-512 is the cryptographic standard a model is identified with (section
+6), and sha2-512 the other one it can be audited with. blake3 is the fast
+cryptographic hash, and sha2-256 the one that other tools (Nix, Hugging
+Face) speak.
 
 The chunked algorithms divide each file into chunks of 2 MiB: chunk `k`
 holds the bytes from `k · 2097152` up to `(k + 1) · 2097152` or the end of
@@ -316,7 +317,7 @@ that gives a newer version than the writer's, with a trailing checksum
 that holds, is left for a reader of that version.
 
 A model with no table a reader can compute has none to check a new table
-against. It may get a sha2-512 table computed from its files if the
+against. It may get a sha3-512 table computed from its files if the
 content id that table gives (section 6) is one known for the model from a
 source trusted for it: the files, the manifest among them, are then the
 model's. A model with no table at all may also get tables computed from
@@ -324,7 +325,7 @@ its files as they are, which vouch for nothing but the bytes they held.
 
 ### 5.3 The file table's fingerprint
 
-The first 32 bytes of the SHA-512 of the ASCII string
+The first 32 bytes of the SHA3-512 of the ASCII string
 `furymodel file table v1\n` followed, for each file in file-table order, by
 the length of its path in bytes as a 4-byte integer, the path, and its size
 as an 8-byte integer. It ties a hash table to the exact files and sizes it
@@ -332,14 +333,22 @@ was computed for.
 
 ## 6. The content id
 
-A model's content id is the SHA-512 of the ASCII string
+A model's content id is the SHA3-512 of the ASCII string
 `furymodel content id v1\n` followed, for each file in file-table order, by
 the length of its path as a 4-byte integer, the path, its size as an 8-byte
-integer and its 64-byte sha2-512 digest. It identifies the model's bytes,
+integer and its 64-byte sha3-512 digest. It identifies the model's bytes,
 manifest included, so two models with equal content ids hold equal files.
 Adding a hash table or splitting a model into delivery parts doesn't change
 it. Its text form is the lowercase hex of the 64 bytes; logs may show the
 first 16 hex digits.
+
+The content id and the file table's fingerprint rest on SHA-3 (FIPS 202)
+rather than SHA-2 (FIPS 180-4). SHA-3 is the newer of the two standards and
+is built on Keccak's sponge construction, independent of SHA-2's
+Merkle-Damgård design, so that an attack found on SHA-2's construction
+wouldn't carry over to a model's identity. The format itself therefore
+needs no SHA-2: the sha2-512 and sha2-256 tables are optional like any
+other.
 
 ## 7. Roots and delivery parts
 
@@ -398,12 +407,12 @@ table present.
 
 The fast tables find corruption, not changes made on purpose: whoever
 changes a file can compute its gxhash3-128 and xxh3-128 digests again.
-Until the sha2-512 table has been checked against the files, the content
+Until the sha3-512 table has been checked against the files, the content
 id it gives is only that table's claim; once it has, the content id is the
 files', and they are the model a source trusted for its content id names
 if the two ids are equal. A fast table is trusted to verify chunks with
 once the same pass over the files has checked it too. So a model is checked
-once, when it is installed, against its sha2-512 table and the fast table
+once, when it is installed, against its sha3-512 table and the fast table
 it will be read with, together and with the content id expected of it;
 from then on its chunks are verified against the fast table as they are
 read.

@@ -100,11 +100,11 @@ impl Model {
         }
         let content_id = tables
             .iter()
-            .find(|table| table.algorithm() == Algorithm::Sha512)
-            .map(|sha512| ContentId::compute(&table, sha512))
+            .find(|table| table.algorithm() == Algorithm::Sha3)
+            .map(|sha3| ContentId::compute(&table, sha3))
             .transpose()
             .map_err(|source| Error::HashTable {
-                path: first.join(Algorithm::Sha512.table_path()),
+                path: first.join(Algorithm::Sha3.table_path()),
                 source,
             })?;
         if let Some(part) = parts.iter().find(|part| {
@@ -112,7 +112,7 @@ impl Model {
         }) {
             return Err(Error::Roots(format!(
                 "part {} of {} is of a model with another content id, or the model has no \
-                 sha2-512 table",
+                 sha3-512 table",
                 part.part, part.parts
             )));
         }
@@ -171,7 +171,12 @@ impl Model {
             .find(|table| table.algorithm() == algorithm)
     }
 
-    /// The content id, if the model has its sha2-512 table.
+    /// The content id the model's sha3-512 table gives, if it has one. It
+    /// is that table's claim, which opening doesn't check: the id is the
+    /// files' only once the table has been checked against them
+    /// ([`Model::verify`] with [`Algorithm::Sha3`]), and they are the model
+    /// a trusted source names only if that source's id is this one
+    /// (section 8 of the specification).
     #[must_use]
     pub fn content_id(&self) -> Option<ContentId> {
         self.content_id

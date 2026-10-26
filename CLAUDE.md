@@ -30,7 +30,7 @@ What the format promises, and this library implements:
   file and per 2 MiB read chunk (gxhash3-128, xxh3-128) so every chunk is
   verified as it lands, and cryptographic ones per file (sha2-512, sha3-512,
   blake3, sha2-256). Tables can be added later without touching payloads;
-  the content id is SHA2-512 based.
+  the content id and the file table's fingerprint are SHA3-512 based.
 - Several roots per model, and delivery parts that a root may hold.
 
 The v0.1 format of the same project ("modeldir") is research material: read

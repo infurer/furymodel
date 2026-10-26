@@ -699,7 +699,7 @@ fn chunk_size_field(algorithm: Algorithm) -> u32 {
 /// the files and sizes it was computed for.
 #[must_use]
 pub fn fingerprint(table: &FileTable) -> [u8; 32] {
-    let mut hasher = sha2::Sha512::new();
+    let mut hasher = sha3::Sha3_512::new();
     hasher.update(b"furymodel file table v1\n");
     for entry in table.entries() {
         hasher.update(path_length(&entry.path));
@@ -716,32 +716,32 @@ fn path_length(path: &str) -> [u8; 4] {
         .to_le_bytes()
 }
 
-/// A model's content id (section 6): the SHA-512 over its files' paths,
-/// sizes and sha2-512 digests.
+/// A model's content id (section 6): the SHA3-512 over its files' paths,
+/// sizes and sha3-512 digests.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ContentId([u8; 64]);
 
 impl ContentId {
-    /// The content id of the files of `table`, from their sha2-512 table.
+    /// The content id of the files of `table`, from their sha3-512 table.
     ///
     /// # Errors
     ///
-    /// If `sha512` is the table of another algorithm, or of other files or
+    /// If `sha3` is the table of another algorithm, or of other files or
     /// sizes than `table`'s.
-    pub fn compute(table: &FileTable, sha512: &HashTable) -> Result<Self, TableError> {
-        if sha512.algorithm != Algorithm::Sha512
-            || sha512.files.len() != table.len()
-            || sha512.fingerprint != fingerprint(table)
+    pub fn compute(table: &FileTable, sha3: &HashTable) -> Result<Self, TableError> {
+        if sha3.algorithm != Algorithm::Sha3
+            || sha3.files.len() != table.len()
+            || sha3.fingerprint != fingerprint(table)
         {
             return Err(TableError {
-                algorithm: sha512.algorithm,
-                message: "the content id needs the sha2-512 table of these files".to_owned(),
+                algorithm: sha3.algorithm,
+                message: "the content id needs the sha3-512 table of these files".to_owned(),
                 newer_version: None,
             });
         }
-        let mut hasher = sha2::Sha512::new();
+        let mut hasher = sha3::Sha3_512::new();
         hasher.update(b"furymodel content id v1\n");
-        for (entry, digest) in table.entries().iter().zip(&sha512.files) {
+        for (entry, digest) in table.entries().iter().zip(&sha3.files) {
             hasher.update(path_length(&entry.path));
             hasher.update(entry.path.as_bytes());
             hasher.update(entry.size.to_le_bytes());

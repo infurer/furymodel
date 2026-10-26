@@ -30,8 +30,8 @@ pub struct Diff {
     pub relabeled: Vec<String>,
     /// Files both have that no hash table of both can compare.
     pub uncompared: Vec<String>,
-    /// The algorithm contents were compared with: the first of sha2-512,
-    /// sha3-512, blake3, sha2-256, xxh3-128 and gxhash3-128 that both
+    /// The algorithm contents were compared with: the first of sha3-512,
+    /// sha2-512, blake3, sha2-256, xxh3-128 and gxhash3-128 that both
     /// models have a table of.
     pub algorithm: Option<Algorithm>,
     /// Tensors only the old model has.
@@ -66,8 +66,8 @@ pub fn diff(old: &Model, new: &Model) -> Diff {
     let mut diff = Diff {
         fields: fields(old, new),
         algorithm: [
-            Algorithm::Sha512,
             Algorithm::Sha3,
+            Algorithm::Sha512,
             Algorithm::Blake3,
             Algorithm::Sha256,
             Algorithm::Xxh3,
@@ -257,7 +257,7 @@ mod tests {
         let b = Model::open(&[dir.path().join("b")]).unwrap();
         let found = diff(&a, &b);
         assert!(found.is_empty(), "{found:?}");
-        assert_eq!(found.algorithm, Some(Algorithm::Sha512));
+        assert_eq!(found.algorithm, Some(Algorithm::Sha3));
     }
 
     #[test]
