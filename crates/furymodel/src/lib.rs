@@ -10,10 +10,16 @@
 //! - [`registry`]: the dtypes, layouts and schemes a manifest may name.
 //! - [`hash`]: the hash algorithms, their tables and the content id.
 //! - [`writer`]: writing a model.
+//! - [`model`]: opening a model from its roots, and reading it with every
+//!   chunk verified; [`io`]: the reads, through the page cache or around
+//!   it; [`part`]: delivery parts.
 
 mod error;
 pub mod hash;
+pub mod io;
 pub mod manifest;
+pub mod model;
+pub mod part;
 pub mod registry;
 #[doc = include_str!("../SPEC.md")]
 pub mod spec {}
@@ -23,6 +29,8 @@ pub mod writer;
 
 pub use error::{Error, Result};
 pub use hash::{Algorithm, ContentId, HashTable};
+pub use io::CacheMode;
 pub use manifest::{FileTable, Manifest, ManifestError};
+pub use model::{Model, Reader, TensorLocation};
 pub use registry::{Dtype, Layout, Scheme};
 pub use writer::Writer;
