@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 Mika Tammi
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# The project's names are words in prose, not identifiers needing backticks;
+# ".." keeps clippy's defaults.
+doc-valid-idents = ["FuryModel", ".."]
+
+# Output goes through `tracing`, or to an explicit writer a caller hands in.
+disallowed-macros = [
+  { path = "std::dbg", reason = "debugging leftovers don't belong in a commit" },
+  { path = "std::eprint", reason = "log with tracing, or write to an explicit writer" },
+  { path = "std::eprintln", reason = "log with tracing, or write to an explicit writer" },
+  { path = "std::print", reason = "log with tracing, or write to an explicit writer" },
+  { path = "std::println", reason = "log with tracing, or write to an explicit writer" },
+]
+
+# Configuration comes from arguments and files, never from the environment.
+disallowed-methods = [
+  { path = "std::env::var", reason = "configuration comes from arguments and files, never the environment" },
+  { path = "std::env::var_os", reason = "configuration comes from arguments and files, never the environment" },
+  { path = "std::env::vars", reason = "configuration comes from arguments and files, never the environment" },
+  { path = "std::env::vars_os", reason = "configuration comes from arguments and files, never the environment" },
+]

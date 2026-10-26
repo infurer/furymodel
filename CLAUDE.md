@@ -39,10 +39,17 @@ it for ideas, don't copy its conventions blindly.
 ## Commands
 
 ```sh
-nix develop
+nix develop                # rust-toolchain.toml's toolchain, cargo-nextest, reuse
+nix build .#checks.aarch64-darwin.clippy   # warnings as errors
+nix build .#checks.aarch64-darwin.nextest
+nix build .#checks.aarch64-darwin.msrv     # nixpkgs' rustc and cargo
 nix fmt
 nix flake check --all-systems --no-update-lock-file
 ```
+
+Builds and tests go through Nix. `cargo build` inside `nix develop` works
+too, with the dependencies from crates.io, as for a user of the crate
+outside Nix.
 
 `nix flake check` evaluates every system but builds only the current
 system's checks. The per-commit gate builds them for all systems; on a Mac
@@ -62,8 +69,15 @@ nix fmt && git diff --exit-code &&
 
 - `flake.nix`: flake-parts on nixos-26.05; systems x86_64-linux,
   aarch64-linux and aarch64-darwin.
-- `nix/`: `checks.nix` (`reuse lint`), `devshell.nix` and `treefmt.nix`
-  (`nix fmt` and `checks.treefmt`).
+- `Cargo.toml`: the workspace, its shared package fields and lints;
+  `crates/furymodel`: the library.
+- `rust-toolchain.toml`: rust-overlay's stable as of `flake.lock`;
+  `clippy.toml`: the disallowed macros and methods.
+- `nix/`: `rust.nix` (the toolchain and crane: one `buildDepsOnly` whose
+  `cargoArtifacts` every Rust check reuses), `checks.nix` (clippy and
+  rustdoc with warnings as errors, nextest, `msrv`: every target built with
+  nixpkgs' own rustc and cargo, `reuse lint`), `devshell.nix` and
+  `treefmt.nix` (`nix fmt` and `checks.treefmt`).
 - `.gitlab-ci.yml`: GitLab CI on x86_64-linux runners. `publish-github`, on
   master, pushes master to the public GitHub repository.
 
@@ -73,7 +87,15 @@ nix fmt && git diff --exit-code &&
   (`2026 Mika Tammi`, `MIT OR Apache-2.0`). Files that can't hold comments are
   annotated in `REUSE.toml`.
 - Every file type has a formatter in `nix/treefmt.nix`, enabled in the
-  commit that adds the first file of that type.
+  commit that adds the first file of that type. Rust is formatted by the
+  toolchain's rustfmt, TOML by taplo.
+- Rust: edition 2024, MSRV 1.95 (nixos-26.05's rustc, which `checks.msrv`
+  builds with; Cargo.toml's rust-version must stay its version), pedantic
+  clippy with warnings as errors, documented public items. No `unsafe`
+  without an explicit `allow` in the crate that needs it and a `SAFETY:`
+  comment on every block. No `println!`/`eprintln!`/`dbg!`: output goes
+  through `tracing` or an explicit writer. No `std::env::var*`:
+  configuration comes from arguments and files.
 - Nothing host-specific in the repository: no hostnames, absolute paths of
   anyone's machine, or names of private repositories and services. master
   is mirrored to a public GitHub repository in full.

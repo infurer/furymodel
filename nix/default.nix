@@ -4,6 +4,7 @@
   imports = [
     ./checks.nix
     ./devshell.nix
+    ./rust.nix
     ./treefmt.nix
   ];
 }

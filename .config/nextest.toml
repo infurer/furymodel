@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Mika Tammi
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# On macOS, Rust's standard library makes a child's pipes with pipe(2) and
+# marks them close-on-exec only afterwards, so that a test nextest spawns
+# on another thread meanwhile can inherit one and hold the other test's
+# output open until it exits too: nextest then calls that test leaky. The
+# leak timeout waits far longer than any test runs; a subprocess that
+# outlives its test by more is still a leak.
+[[profile.default.overrides]]
+platform = { host = 'cfg(target_os = "macos")' }
+leak-timeout = "60s"

@@ -5,5 +5,8 @@
 result
 result-*
 
+# Cargo's build directory
+target/
+
 # Local Claude Code state
 .claude/

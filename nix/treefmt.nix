@@ -8,7 +8,7 @@
     inputs.treefmt-nix.flakeModule
   ];
 
-  perSystem = {
+  perSystem = {rustToolchain, ...}: {
     treefmt = {
       projectRootFile = "flake.nix";
 
@@ -17,6 +17,12 @@
         deadnix.enable = true;
         statix.enable = true;
         taplo.enable = true;
+        # The toolchain's own rustfmt, so `nix fmt` and `cargo fmt` agree.
+        rustfmt = {
+          enable = true;
+          package = rustToolchain;
+          edition = "2024";
+        };
         mdformat = {
           enable = true;
           # GitHub-flavoured Markdown: plain mdformat would mangle tables.
@@ -29,6 +35,7 @@
       settings.global.excludes = [
         ".gitignore"
         "LICENSES/*"
+        "Cargo.lock"
         "flake.lock"
       ];
     };
