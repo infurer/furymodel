@@ -49,7 +49,7 @@ nix flake check --all-systems --no-update-lock-file
 
 Builds and tests go through Nix. `cargo build` inside `nix develop` works
 too, with the dependencies from crates.io, as for a user of the crate
-outside Nix.
+outside Nix; CI's `cargo` job keeps it working.
 
 `nix flake check` evaluates every system but builds only the current
 system's checks. The per-commit gate builds them for all systems; on a Mac
@@ -78,8 +78,11 @@ nix fmt && git diff --exit-code &&
   rustdoc with warnings as errors, nextest, `msrv`: every target built with
   nixpkgs' own rustc and cargo, `reuse lint`), `devshell.nix` and
   `treefmt.nix` (`nix fmt` and `checks.treefmt`).
-- `.gitlab-ci.yml`: GitLab CI on x86_64-linux runners. `publish-github`, on
-  master, pushes master to the public GitHub repository.
+- `.gitlab-ci.yml`: GitLab CI on x86_64-linux runners. `checks` runs
+  `nix flake check --all-systems`, which builds x86_64-linux's checks;
+  `cargo` runs `cargo build` inside `nix develop`, the build outside Nix;
+  `publish-github`, on master once those passed, pushes master to the public
+  GitHub repository.
 
 ## Conventions
 
