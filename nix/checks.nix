@@ -6,10 +6,12 @@
   perSystem = {
     cargoArtifacts,
     cargoArtifactsMsrv,
+    cargoArtifactsPortable,
     commonArgs,
     craneLib,
     craneLibMsrv,
     pkgs,
+    portableArgs,
     ...
   }: {
     checks = {
@@ -24,6 +26,14 @@
       nextest = craneLib.cargoNextest (commonArgs
         // {
           inherit cargoArtifacts;
+          cargoNextestExtraArgs = "--workspace --no-tests=warn";
+        });
+
+      # The tests again, built without AES instructions: no gxhash3-128, and
+      # xxh3-128 as the fast check.
+      nextest-portable = craneLib.cargoNextest (portableArgs
+        // {
+          cargoArtifacts = cargoArtifactsPortable;
           cargoNextestExtraArgs = "--workspace --no-tests=warn";
         });
 

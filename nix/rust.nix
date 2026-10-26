@@ -3,9 +3,9 @@
 #
 # The Rust toolchain from rust-overlay (rust-toolchain.toml) and crane. One
 # buildDepsOnly produces the dependencies' cargoArtifacts, which every Rust
-# check reuses, so a source change never rebuilds them. A second set, built
-# with nixpkgs' own rustc and cargo, serves the check of the MSRV
-# (checks.nix).
+# check reuses, so a source change never rebuilds them. A second set,
+# without AES instructions, serves the portable tests, and a third, built
+# with nixpkgs' own rustc and cargo, the check of the MSRV (checks.nix).
 {inputs, ...}: {
   perSystem = {system, ...}: let
     pkgs = import inputs.nixpkgs {
@@ -36,11 +36,24 @@
       pname = "furymodel";
       version = "0.2.0";
       strictDeps = true;
+      # Read by a test (hash::tests), so that the checks fail if the build
+      # loses gxhash3-128 where it should have it.
+      FURYMODEL_GXHASH_EXPECTED = "1";
     };
+
+    # Without AES, as a dependent's build without it compiles the crate:
+    # RUSTFLAGS overrides .cargo/config.toml's target features.
+    portableArgs =
+      commonArgs
+      // {
+        RUSTFLAGS = "-C target-feature=-aes";
+        FURYMODEL_GXHASH_EXPECTED = "0";
+      };
   in {
     _module.args = {
-      inherit pkgs craneLib craneLibMsrv commonArgs rustToolchain;
+      inherit pkgs craneLib craneLibMsrv commonArgs portableArgs rustToolchain;
       cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+      cargoArtifactsPortable = craneLib.buildDepsOnly portableArgs;
       cargoArtifactsMsrv = craneLibMsrv.buildDepsOnly commonArgs;
     };
   };

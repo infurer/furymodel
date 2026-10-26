@@ -77,12 +77,18 @@ nix fmt && git diff --exit-code &&
   lints; `crates/furymodel`: the library, whose modules follow SPEC.md's
   sections (the crate documentation lists them).
 - `rust-toolchain.toml`: rust-overlay's stable as of `flake.lock`;
-  `clippy.toml`: the disallowed macros and methods.
+  `clippy.toml`: the disallowed macros and methods; `.cargo/config.toml`:
+  AES instructions for the Linux targets, which gxhash needs at compile
+  time (Apple's target has them). Built without them, the library leaves
+  gxhash3-128 out and verifies with xxh3-128; built with them, it still
+  uses gxhash3-128 only where the CPU has AES, as CPUID or the kernel's
+  hwcaps say at run time.
 - `nix/`: `rust.nix` (the toolchain and crane: one `buildDepsOnly` whose
   `cargoArtifacts` every Rust check reuses), `checks.nix` (clippy and
-  rustdoc with warnings as errors, nextest, `msrv`: every target built with
-  nixpkgs' own rustc and cargo, `reuse lint`), `devshell.nix` and
-  `treefmt.nix` (`nix fmt` and `checks.treefmt`).
+  rustdoc with warnings as errors, nextest, nextest again built without AES
+  instructions, `msrv`: every target built with nixpkgs' own rustc and
+  cargo, `reuse lint`), `devshell.nix` and `treefmt.nix` (`nix fmt` and
+  `checks.treefmt`).
 - `.gitlab-ci.yml`: GitLab CI on x86_64-linux runners. `checks` runs
   `nix flake check --all-systems`, which builds x86_64-linux's checks;
   `cargo` runs `cargo build` inside `nix develop`, the build outside Nix;
