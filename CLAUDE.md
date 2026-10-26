@@ -67,6 +67,10 @@ nix fmt && git diff --exit-code &&
 
 ## Architecture
 
+- `crates/furymodel/SPEC.md`: the format's specification, normative, which
+  the crate's documentation shows as its `spec` module. The code follows
+  it; a change to the format changes it in the same commit, and bumps
+  `format_version` where its section 9 says so.
 - `flake.nix`: flake-parts on nixos-26.05; systems x86_64-linux,
   aarch64-linux and aarch64-darwin.
 - `Cargo.toml`: the workspace, its shared package fields and lints;

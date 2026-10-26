@@ -22,8 +22,17 @@
       if msrv == pkgs.lib.versions.majorMinor pkgs.rustc.version
       then inputs.crane.mkLib pkgs
       else throw "Cargo.toml's rust-version is ${msrv}, but nixpkgs' rustc is ${pkgs.rustc.version}: bring one to the other";
+    # The Rust sources, and the specification the crate's documentation
+    # includes.
+    src = pkgs.lib.cleanSourceWith {
+      src = ../.;
+      name = "source";
+      filter = path: type:
+        craneLib.filterCargoSources path type
+        || pkgs.lib.hasSuffix "/crates/furymodel/SPEC.md" path;
+    };
     commonArgs = {
-      src = craneLib.cleanCargoSource ../.;
+      inherit src;
       pname = "furymodel";
       version = "0.2.0";
       strictDeps = true;
