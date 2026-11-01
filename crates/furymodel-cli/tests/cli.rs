@@ -168,6 +168,90 @@ fn info_verify_hash_add_split_and_diff() {
 
 // A model's strings reach the terminal with their control characters
 // escaped: a downloaded model can't move the cursor or recolor the screen.
+// With no table to check its files against, a model gets a first one only
+// by its content id, or by its files taken as they are.
+#[test]
+fn hash_add_gives_a_model_without_tables_a_first_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let lost = dir.path().join("lost");
+    write_model(&lost, 3);
+    let lost = lost.to_str().unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(&run(&["info", "--json", lost]).stdout).unwrap();
+    let content_id = json["content_id"].as_str().unwrap().to_owned();
+    std::fs::remove_dir_all(Path::new(lost).join("hashes")).unwrap();
+    let output = run(&["hash", "add", "sha3-512", lost]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(text(&output).contains("--expect"), "{}", text(&output));
+    let wrong = "0".repeat(128);
+    let output = run(&["hash", "add", "sha3-512", "--expect", &wrong, lost]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(text(&output).contains("expected"), "{}", text(&output));
+    assert!(!Path::new(lost).join(Algorithm::Sha3.table_path()).exists());
+    let output = run(&["hash", "add", "sha3-512", "--expect", &content_id, lost]);
+    assert!(output.status.success(), "{}", text(&output));
+    let output = run(&["verify", "--algorithm", "sha3-512", lost]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(text(&output).contains("authentic"), "{}", text(&output));
+    let output = run(&["hash", "add", "xxh3-128", "--trust-files", lost]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(
+        text(&output).contains("without --expect or --trust-files"),
+        "{}",
+        text(&output)
+    );
+    std::fs::remove_dir_all(Path::new(lost).join("hashes")).unwrap();
+    let output = run(&["hash", "add", "xxh3-128", "--trust-files", lost]);
+    assert!(output.status.success(), "{}", text(&output));
+    let output = run(&[
+        "hash",
+        "add",
+        "sha3-512",
+        "--expect",
+        &content_id,
+        "--trust-files",
+        lost,
+    ]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+}
+
+// A table added to a model in parts goes into one part: hash add says the
+// others need it too.
+#[test]
+fn hash_add_into_parts_names_the_others() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = dir.path().join("model");
+    write_model(&model, 4);
+    let parts = dir.path().join("parts");
+    let output = run(&[
+        "split",
+        "--max-part-size",
+        "4MiB",
+        "--out",
+        parts.to_str().unwrap(),
+        model.to_str().unwrap(),
+    ]);
+    assert!(output.status.success(), "{}", text(&output));
+    let mut roots: Vec<String> = std::fs::read_dir(&parts)
+        .unwrap()
+        .map(|entry| entry.unwrap().path().to_str().unwrap().to_owned())
+        .collect();
+    roots.sort();
+    assert!(roots.len() >= 2, "{roots:?}");
+    for root in &roots {
+        std::fs::remove_file(Path::new(root).join(Algorithm::Blake3.table_path())).unwrap();
+    }
+    let mut args = vec!["hash", "add", "blake3"];
+    args.extend(roots.iter().map(String::as_str));
+    let output = run(&args);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        text(&output).contains("into the other parts too"),
+        "{}",
+        text(&output)
+    );
+}
+
 #[test]
 fn info_escapes_control_characters() {
     let dir = tempfile::tempdir().unwrap();

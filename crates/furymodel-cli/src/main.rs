@@ -17,11 +17,11 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
 use furymodel::hash::Algorithm;
 use furymodel::manifest::EntryKind;
-use furymodel::{CacheMode, Dtype, Model, diff, part};
+use furymodel::{CacheMode, ContentId, Dtype, Model, Vouch, diff, part};
 
 #[derive(Parser)]
 #[command(
@@ -100,6 +100,15 @@ enum HashCommand {
         /// The root the table goes into; by default the first.
         #[arg(long)]
         into: Option<PathBuf>,
+        /// For a model with no table to check its files against: its content
+        /// id, from a source trusted for it, which the sha3-512 table
+        /// computed from the files must give.
+        #[arg(long, value_name = "CONTENT_ID", conflicts_with = "trust_files")]
+        expect: Option<String>,
+        /// For a model with no hash table at all: vouch for its files as they
+        /// are, with nothing to check them against.
+        #[arg(long)]
+        trust_files: bool,
         #[command(flatten)]
         reading: Reading,
         /// The model's roots.
@@ -168,30 +177,7 @@ fn run(command: Command, out: &mut dyn Write) -> Result<bool> {
             reading,
             roots,
         } => verify(&open(&roots)?, all, &algorithms, &reading, out),
-        Command::Hash(HashCommand::Add {
-            algorithm,
-            into,
-            reading,
-            roots,
-        }) => {
-            let algorithm = algorithm_of(&algorithm)?;
-            let model = open(&roots)?;
-            let into = match into {
-                None => roots[0].clone(),
-                Some(into) => root_named(&model, &into)?,
-            };
-            let start = Instant::now();
-            let path =
-                model.add_table(algorithm, &into, reading.mode(), reading.threads, &|_| {})?;
-            writeln!(
-                out,
-                "wrote {}, {} files hashed in {:.1} s",
-                path.display(),
-                model.table().len(),
-                start.elapsed().as_secs_f64()
-            )?;
-            Ok(true)
-        }
+        Command::Hash(command) => hash(command, out),
         Command::Split {
             max_part_size,
             out: directory,
@@ -236,6 +222,73 @@ fn shown(text: &str) -> Cow<'_, str> {
     }
 }
 
+// Hash tables: adding one.
+fn hash(command: HashCommand, out: &mut dyn Write) -> Result<bool> {
+    let HashCommand::Add {
+        algorithm,
+        into,
+        expect,
+        trust_files,
+        reading,
+        roots,
+    } = command;
+    let algorithm = algorithm_of(&algorithm)?;
+    let vouch = match (expect, trust_files) {
+        (Some(id), _) => Some(Vouch::ContentId(ContentId::from_hex(&id).ok_or_else(
+            || anyhow!("{id:?} isn't a content id, 128 lowercase hex digits"),
+        )?)),
+        (None, true) => Some(Vouch::Files),
+        (None, false) => None,
+    };
+    let into = match into {
+        None => roots[0].clone(),
+        Some(into) => root_named(&roots, &into)?,
+    };
+    let start = Instant::now();
+    let (path, model) = match vouch {
+        None => {
+            let model = open(&roots).map_err(with_first_table_hint)?;
+            let path =
+                model.add_table(algorithm, &into, reading.mode(), reading.threads, &|_| {})?;
+            (path, model)
+        }
+        Some(vouch) => {
+            if Model::open(&roots).is_ok() {
+                bail!(
+                    "the model has a table to check its files against: add tables to it \
+                         without --expect or --trust-files"
+                );
+            }
+            let path = Model::add_first_table(
+                &roots,
+                &into,
+                algorithm,
+                vouch,
+                reading.mode(),
+                reading.threads,
+                &|_| {},
+            )?;
+            // It opens now, by the table it has.
+            (path, open(&roots)?)
+        }
+    };
+    writeln!(
+        out,
+        "wrote {}, {} files hashed in {:.1} s",
+        path.display(),
+        model.table().len(),
+        start.elapsed().as_secs_f64()
+    )?;
+    if !model.parts().is_empty() {
+        writeln!(
+            out,
+            "every part holds every table: copy {} into the other parts too",
+            path.display()
+        )?;
+    }
+    Ok(true)
+}
+
 fn open(roots: &[PathBuf]) -> Result<Model> {
     Model::open(roots).with_context(|| {
         let roots: Vec<String> = roots
@@ -256,13 +309,28 @@ fn algorithm_of(id: &str) -> Result<Algorithm> {
     })
 }
 
-// The model's root that is the same directory as `into`.
-fn root_named(model: &Model, into: &Path) -> Result<PathBuf> {
+// A model with no table to check its files against: how it gets one.
+fn with_first_table_hint(error: anyhow::Error) -> anyhow::Error {
+    if matches!(
+        error.downcast_ref::<furymodel::Error>(),
+        Some(furymodel::Error::Unverifiable(_))
+    ) {
+        anyhow!(
+            "{error:#}; to add its first table, give the model's content id from a source you \
+             trust with --expect, or, if it has no hash table at all, vouch for its files as \
+             they are with --trust-files"
+        )
+    } else {
+        error
+    }
+}
+
+// The root among `roots` that is the same directory as `into`.
+fn root_named(roots: &[PathBuf], into: &Path) -> Result<PathBuf> {
     let wanted = into
         .canonicalize()
         .with_context(|| format!("{}", into.display()))?;
-    model
-        .roots()
+    roots
         .iter()
         .find(|root| root.canonicalize().is_ok_and(|root| root == wanted))
         .cloned()

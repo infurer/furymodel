@@ -6,7 +6,7 @@
 use std::io;
 use std::path::PathBuf;
 
-use crate::hash::{Algorithm, TableError};
+use crate::hash::{Algorithm, ContentId, TableError};
 use crate::manifest::ManifestError;
 
 /// What can go wrong writing, opening or reading a model.
@@ -129,9 +129,19 @@ pub enum Error {
     #[error("the model has no hash table this build can verify chunks with: {0}")]
     NoVerifier(String),
     /// The model has no table this build can compute, so that none of its
-    /// bytes, not even the manifest's, can be verified.
+    /// bytes, not even the manifest's, can be verified. Its tables can come
+    /// from its source again, or [`Model::add_first_table`](crate::Model::add_first_table)
+    /// adds one, vouched for by the model's content id.
     #[error("the model can't be verified: {0}")]
     Unverifiable(String),
+    /// The files give another content id than the one expected of them.
+    #[error("the files give the content id {found}, not the {expected} expected")]
+    ContentIdDiffers {
+        /// The content id expected.
+        expected: Box<ContentId>,
+        /// The content id the files give.
+        found: Box<ContentId>,
+    },
     /// The library was asked for something its interface rules out, such as
     /// chunks a file doesn't have.
     #[error("{0}")]

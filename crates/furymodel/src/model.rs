@@ -34,6 +34,21 @@ pub struct Model {
     content_id: Option<ContentId>,
 }
 
+/// What vouches for a first table of a model that has none to check its
+/// files against ([`Model::add_first_table`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Vouch {
+    /// The model's content id, from a source trusted for it such as the
+    /// model's publisher: the sha3-512 table computed from the files is
+    /// written only if it gives this id, which makes the files, the
+    /// manifest among them, the model's.
+    ContentId(ContentId),
+    /// The files as they are, for a model with no table at all: the table
+    /// then vouches for nothing but the bytes the files hold.
+    Files,
+}
+
 /// A file whose bytes don't match a digest.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Mismatch {
@@ -63,6 +78,142 @@ impl Model {
     /// between roots, the model has no table this build can compute
     /// ([`Error::Unverifiable`]), or the manifest doesn't match its digest.
     pub fn open<P: AsRef<Path>>(roots: &[P]) -> Result<Self> {
+        let (model, manifest_bytes) = Self::gather(roots)?;
+        if !model
+            .tables
+            .iter()
+            .any(|table| table.algorithm().is_supported())
+        {
+            return Err(Error::Unverifiable(if model.tables.is_empty() {
+                "it has no hash table".to_owned()
+            } else {
+                "its only table is gxhash3-128's, which needs AES instructions".to_owned()
+            }));
+        }
+        model.check_parts()?;
+        let index = model
+            .table
+            .index_of(MANIFEST_PATH)
+            .ok_or_else(|| Error::Roots("the file table has no manifest".to_owned()))?;
+        model.check_bytes(index, &manifest_bytes)?;
+        Ok(model)
+    }
+
+    /// Adds a first table of `algorithm` to the model whose roots are
+    /// `roots`, a model with no table this build can compute and so none to
+    /// check its files against, and writes it into `root`, one of the
+    /// roots. `vouch` vouches for the table instead (section 5.2 of the
+    /// specification). The manifest's digest is of the bytes the file table
+    /// was read from. Opening the model then finds the table, and further
+    /// tables are added with [`Model::add_table`]; as there, the table goes
+    /// into `root` alone, and belongs in a model's other parts too.
+    ///
+    /// # Errors
+    ///
+    /// If the model has a table this build can compute, `root` isn't one of
+    /// its roots, a content id vouches for another table than sha3-512's,
+    /// the files vouch for a model that has a table, the files give another
+    /// content id than the one vouching ([`Error::ContentIdDiffers`]), parts
+    /// name another, or opening, reading or writing fails as in
+    /// [`Model::open`] and [`Model::add_table`].
+    pub fn add_first_table<P: AsRef<Path>>(
+        roots: &[P],
+        root: &Path,
+        algorithm: Algorithm,
+        vouch: Vouch,
+        mode: CacheMode,
+        threads: usize,
+        progress: &(dyn Fn(u64) + Sync),
+    ) -> Result<PathBuf> {
+        let (mut model, manifest_bytes) = Self::gather(roots)?;
+        if model
+            .tables
+            .iter()
+            .any(|table| table.algorithm().is_supported())
+        {
+            return Err(Error::Usage(
+                "the model has a table this build can check its files against: add tables to it \
+                 with Model::add_table"
+                    .to_owned(),
+            ));
+        }
+        if !model.roots.iter().any(|known| known == root) {
+            return Err(Error::Usage(format!(
+                "{} isn't one of the model's roots",
+                root.display()
+            )));
+        }
+        match vouch {
+            Vouch::ContentId(_) if algorithm != Algorithm::Sha3 => {
+                return Err(Error::Usage(
+                    "a content id vouches for the sha3-512 table it is computed from".to_owned(),
+                ));
+            }
+            Vouch::Files if !model.tables.is_empty() => {
+                return Err(Error::Usage(
+                    "the model has a table that can't be computed here: vouch for a first \
+                     table with the model's content id, or add tables where it can be"
+                        .to_owned(),
+                ));
+            }
+            Vouch::Files if !model.parts.is_empty() && algorithm != Algorithm::Sha3 => {
+                return Err(Error::Usage(
+                    "a model in parts needs its sha3-512 table first, for the content id its \
+                     parts name"
+                        .to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        let mut digests: Vec<FileDigests> = model
+            .digests(&[algorithm], mode, threads, progress, None)?
+            .into_iter()
+            .map(|mut digests| digests.remove(0))
+            .collect();
+        // The manifest's of the bytes in hand, which the file table was
+        // built from, rather than of the file read once more.
+        let manifest = model
+            .table
+            .index_of(MANIFEST_PATH)
+            .ok_or_else(|| Error::Roots("the file table has no manifest".to_owned()))?;
+        let mut manifest_hasher = FileHasher::new(&[algorithm]).map_err(Error::NoTable)?;
+        manifest_hasher.update(&manifest_bytes);
+        digests[manifest] = manifest_hasher.finish().remove(0);
+        let path = root.join(algorithm.table_path());
+        let table = HashTable::new(algorithm, &model.table, digests).map_err(|source| {
+            Error::HashTable {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        if algorithm == Algorithm::Sha3 {
+            let found =
+                ContentId::compute(&model.table, &table).map_err(|source| Error::HashTable {
+                    path: path.clone(),
+                    source,
+                })?;
+            if let Vouch::ContentId(expected) = vouch
+                && found != expected
+            {
+                return Err(Error::ContentIdDiffers {
+                    expected: Box::new(expected),
+                    found: Box::new(found),
+                });
+            }
+            model.content_id = Some(found);
+            model.check_parts()?;
+        }
+        let hashes = root.join(HASHES_DIR);
+        fs::create_dir_all(&hashes).at(&hashes)?;
+        write_new(&path, &table.encode())?;
+        sync_dir(root)?;
+        Ok(path)
+    }
+
+    // The model whose roots are `roots` as its files say, with the bytes of
+    // its manifest: complete, its manifests one and its tables valid for
+    // its file table, but nothing verified yet.
+    fn gather<P: AsRef<Path>>(roots: &[P]) -> Result<(Self, Vec<u8>)> {
         let roots: Vec<PathBuf> = roots
             .iter()
             .map(|root| root.as_ref().to_path_buf())
@@ -91,13 +242,6 @@ impl Model {
             return Err(incomplete(&table, &missing, &parts));
         }
         let tables = read_tables(&roots, &table)?;
-        if !tables.iter().any(|table| table.algorithm().is_supported()) {
-            return Err(Error::Unverifiable(if tables.is_empty() {
-                "it has no hash table".to_owned()
-            } else {
-                "its only table is gxhash3-128's, which needs AES instructions".to_owned()
-            }));
-        }
         let content_id = tables
             .iter()
             .find(|table| table.algorithm() == Algorithm::Sha3)
@@ -107,15 +251,6 @@ impl Model {
                 path: first.join(Algorithm::Sha3.table_path()),
                 source,
             })?;
-        if let Some(part) = parts.iter().find(|part| {
-            Some(part.content_id.as_str()) != content_id.map(|id| id.to_string()).as_deref()
-        }) {
-            return Err(Error::Roots(format!(
-                "part {} of {} is of a model with another content id, or the model has no \
-                 sha3-512 table",
-                part.part, part.parts
-            )));
-        }
         let model = Self {
             roots,
             manifest,
@@ -125,12 +260,24 @@ impl Model {
             parts,
             content_id,
         };
-        let index = model
-            .table
-            .index_of(MANIFEST_PATH)
-            .ok_or_else(|| Error::Roots("the file table has no manifest".to_owned()))?;
-        model.check_bytes(index, &manifest_bytes)?;
-        Ok(model)
+        Ok((model, manifest_bytes))
+    }
+
+    // That every part is one of this model's, of its content id.
+    fn check_parts(&self) -> Result<()> {
+        let content_id = self.content_id.map(|id| id.to_string());
+        if let Some(part) = self
+            .parts
+            .iter()
+            .find(|part| Some(part.content_id.as_str()) != content_id.as_deref())
+        {
+            return Err(Error::Roots(format!(
+                "part {} of {} is of a model with another content id, or the model has no \
+                 sha3-512 table",
+                part.part, part.parts
+            )));
+        }
+        Ok(())
     }
 
     /// The roots, in the order files are read from them.

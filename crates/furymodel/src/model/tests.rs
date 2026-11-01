@@ -5,9 +5,9 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
-use super::{Mismatch, Model, TensorLocation};
+use super::{Mismatch, Model, TensorLocation, Vouch};
 use crate::error::Error;
-use crate::hash::{Algorithm, CHUNK_SIZE};
+use crate::hash::{Algorithm, CHUNK_SIZE, ContentId};
 use crate::io::{AlignedBuf, CacheMode};
 use crate::manifest::MANIFEST_PATH;
 use crate::part::Part;
@@ -650,4 +650,109 @@ fn opens_no_model_it_cant_verify() {
     }
     let error = Model::open(&[dir.path()]).unwrap_err();
     assert!(matches!(error, Error::Unverifiable(_)), "{error}");
+}
+
+fn first_table(
+    roots: &[&Path],
+    algorithm: Algorithm,
+    vouch: Vouch,
+) -> Result<std::path::PathBuf, Error> {
+    Model::add_first_table(
+        roots,
+        roots[0],
+        algorithm,
+        vouch,
+        CacheMode::Bypass,
+        2,
+        &|_| {},
+    )
+}
+
+// A model that lost its tables gets a first one by its content id: the
+// sha3-512 table is written only if the files give that id, and then the
+// others come as for any model.
+#[test]
+fn adds_a_first_table_by_the_content_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let content_id = write_tiny(dir.path(), false).content_id.unwrap();
+    fs::remove_dir_all(dir.path().join("hashes")).unwrap();
+    assert!(matches!(
+        Model::open(&[dir.path()]),
+        Err(Error::Unverifiable(_))
+    ));
+    let mut hex = content_id.to_string();
+    hex.replace_range(..1, if hex.starts_with('0') { "1" } else { "0" });
+    let other = ContentId::from_hex(&hex).unwrap();
+
+    match first_table(&[dir.path()], Algorithm::Sha3, Vouch::ContentId(other)) {
+        Err(Error::ContentIdDiffers { expected, found }) => {
+            assert_eq!((*expected, *found), (other, content_id));
+        }
+        result => panic!("{result:?}"),
+    }
+    assert!(!dir.path().join("hashes").exists());
+    let error =
+        first_table(&[dir.path()], Algorithm::Xxh3, Vouch::ContentId(content_id)).unwrap_err();
+    assert!(error.to_string().contains("sha3-512"), "{error}");
+
+    first_table(&[dir.path()], Algorithm::Sha3, Vouch::ContentId(content_id)).unwrap();
+    let model = Model::open(&[dir.path()]).unwrap();
+    assert_eq!(model.content_id(), Some(content_id));
+    model
+        .add_table(Algorithm::Xxh3, dir.path(), CacheMode::Use, 2, &|_| {})
+        .unwrap();
+    let model = Model::open(&[dir.path()]).unwrap();
+    assert_eq!(model.verifier().unwrap(), Algorithm::Xxh3);
+    let error = first_table(&[dir.path()], Algorithm::Blake3, Vouch::Files).unwrap_err();
+    assert!(error.to_string().contains("add tables to it"), "{error}");
+
+    // A file changed behind the model's back gives another content id.
+    let dir = tempfile::tempdir().unwrap();
+    write_tiny(dir.path(), false);
+    fs::remove_dir_all(dir.path().join("hashes")).unwrap();
+    let path = dir.path().join("layers/01/experts/02.bin");
+    let mut contents = fs::read(&path).unwrap();
+    contents[5] ^= 0x40;
+    fs::write(&path, &contents).unwrap();
+    match first_table(&[dir.path()], Algorithm::Sha3, Vouch::ContentId(content_id)) {
+        Err(Error::ContentIdDiffers { expected, found }) => {
+            assert_eq!(*expected, content_id);
+            assert_ne!(*found, content_id);
+        }
+        result => panic!("{result:?}"),
+    }
+    assert!(!dir.path().join("hashes").exists());
+}
+
+// A model with no table at all may get tables of its files as they are,
+// but not a model with parts and no sha3-512 table, which their content id
+// needs.
+#[test]
+fn takes_the_files_as_they_are_where_nothing_vouches_for_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let written = write_tiny(&dir.path().join("model"), false);
+    let model = Model::open(&[dir.path().join("model")]).unwrap();
+    let parts = crate::part::split(&model, 2_200_000, &dir.path().join("parts")).unwrap();
+    let roots: Vec<&Path> = parts.iter().map(std::path::PathBuf::as_path).collect();
+    for part in &parts {
+        fs::remove_dir_all(part.join("hashes")).unwrap();
+    }
+    let error = first_table(&roots, Algorithm::Xxh3, Vouch::Files).unwrap_err();
+    assert!(
+        error.to_string().contains("needs its sha3-512 table"),
+        "{error}"
+    );
+    first_table(&roots, Algorithm::Sha3, Vouch::Files).unwrap();
+    let reopened = Model::open(&roots).unwrap();
+    assert_eq!(reopened.content_id(), written.content_id);
+
+    let root = dir.path().join("model");
+    fs::remove_dir_all(root.join("hashes")).unwrap();
+    first_table(&[&root], Algorithm::Xxh3, Vouch::Files).unwrap();
+    let model = Model::open(&[&root]).unwrap();
+    assert_eq!(model.content_id(), None);
+    let mismatches = model
+        .verify(&[Algorithm::Xxh3], CacheMode::Bypass, 2, &|_| {})
+        .unwrap();
+    assert_eq!(mismatches, []);
 }
