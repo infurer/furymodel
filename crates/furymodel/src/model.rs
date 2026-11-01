@@ -493,6 +493,47 @@ impl Model {
         Ok(mismatches)
     }
 
+    /// Checks that the model is the one whose content id is `expected`, as a
+    /// model is checked when it is installed (section 8 of the
+    /// specification): the content id its sha3-512 table gives must be
+    /// `expected`, and every file must match the sha3-512 table and the
+    /// table chunks are verified with, read in one pass as
+    /// [`Model::verify`] reads them. With no mismatches, the files are that
+    /// model's, and the table chunks are verified with vouches for them from
+    /// then on.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoTable`] if the model has no sha3-512 table,
+    /// [`Error::ContentIdDiffers`] if it gives another content id, before
+    /// anything is read, or as [`Model::verify`]. Files that don't match are
+    /// the returned mismatches.
+    pub fn verify_expecting(
+        &self,
+        expected: ContentId,
+        mode: CacheMode,
+        threads: usize,
+        progress: &(dyn Fn(u64) + Sync),
+    ) -> Result<Vec<Mismatch>> {
+        let found = self.content_id.ok_or(Error::NoTable(Algorithm::Sha3))?;
+        if found != expected {
+            return Err(Error::ContentIdDiffers {
+                expected: Box::new(expected),
+                found: Box::new(found),
+            });
+        }
+        self.verify(&self.install_check(), mode, threads, progress)
+    }
+
+    /// The tables [`Model::verify_expecting`] checks the files against:
+    /// sha3-512's, and the one chunks are verified with if there is one.
+    #[must_use]
+    pub fn install_check(&self) -> Vec<Algorithm> {
+        let mut algorithms = vec![Algorithm::Sha3];
+        algorithms.extend(self.verifier().ok());
+        algorithms
+    }
+
     /// Computes the table of `algorithm`, which the model doesn't have yet,
     /// from its files, and writes it into `root`, one of the model's roots.
     /// The files are read in `mode` as [`Model::verify`] reads them, and

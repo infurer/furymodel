@@ -756,3 +756,62 @@ fn takes_the_files_as_they_are_where_nothing_vouches_for_them() {
         .unwrap();
     assert_eq!(mismatches, []);
 }
+
+// A model is the one of a content id once its files match the sha3-512
+// table, which gives that id, and the fast table, read in one pass; an id
+// the table doesn't give fails before anything is read.
+#[test]
+fn verifies_a_model_as_the_one_of_a_content_id() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let dir = tempfile::tempdir().unwrap();
+    let content_id = write_tiny(dir.path(), false).content_id.unwrap();
+    let model = Model::open(&[dir.path()]).unwrap();
+    let fast = model.verifier().unwrap();
+    assert_eq!(model.install_check(), [Algorithm::Sha3, fast]);
+    let read = AtomicU64::new(0);
+    let progress = |n| {
+        read.fetch_add(n, Ordering::Relaxed);
+    };
+    let mismatches = model
+        .verify_expecting(content_id, CacheMode::Bypass, 2, &progress)
+        .unwrap();
+    assert_eq!(mismatches, []);
+    assert_eq!(read.swap(0, Ordering::Relaxed), model.table().total_size());
+
+    let mut hex = content_id.to_string();
+    hex.replace_range(..1, if hex.starts_with('0') { "1" } else { "0" });
+    let other = ContentId::from_hex(&hex).unwrap();
+    match model.verify_expecting(other, CacheMode::Bypass, 2, &progress) {
+        Err(Error::ContentIdDiffers { expected, found }) => {
+            assert_eq!((*expected, *found), (other, content_id));
+        }
+        result => panic!("{result:?}"),
+    }
+    assert_eq!(read.load(Ordering::Relaxed), 0);
+
+    // A payload changed behind the model's back: the content id is still
+    // the table's claim, and the files don't match it.
+    let path = "layers/01/experts/02.bin";
+    let full = dir.path().join(path);
+    let mut contents = fs::read(&full).unwrap();
+    contents[5] ^= 0x40;
+    fs::write(&full, &contents).unwrap();
+    let mismatches = model
+        .verify_expecting(content_id, CacheMode::Bypass, 2, &progress)
+        .unwrap();
+    for algorithm in [Algorithm::Sha3, fast] {
+        assert!(
+            mismatches
+                .iter()
+                .any(|mismatch| mismatch.path == path && mismatch.algorithm == algorithm),
+            "{mismatches:?}"
+        );
+    }
+
+    fs::remove_file(dir.path().join(Algorithm::Sha3.table_path())).unwrap();
+    let model = Model::open(&[dir.path()]).unwrap();
+    assert!(matches!(
+        model.verify_expecting(content_id, CacheMode::Bypass, 2, &progress),
+        Err(Error::NoTable(Algorithm::Sha3))
+    ));
+}

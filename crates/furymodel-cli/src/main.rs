@@ -21,6 +21,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
 use furymodel::hash::Algorithm;
 use furymodel::manifest::EntryKind;
+use furymodel::model::Mismatch;
 use furymodel::{CacheMode, ContentId, Dtype, Model, Vouch, diff, part};
 
 #[derive(Parser)]
@@ -56,8 +57,14 @@ enum Command {
         all: bool,
         /// Check against this algorithm's table; may be given several
         /// times. By default, the fastest fast check.
-        #[arg(long = "algorithm", value_name = "ID")]
+        #[arg(long = "algorithm", value_name = "ID", conflicts_with = "expect")]
         algorithms: Vec<String>,
+        /// Check that the model is the one of this content id, from a source
+        /// trusted for it: against the sha3-512 table, which must give the
+        /// id, and the fastest fast check, in one pass, as a model is checked
+        /// when it is installed.
+        #[arg(long, value_name = "CONTENT_ID", conflicts_with = "all")]
+        expect: Option<String>,
         #[command(flatten)]
         reading: Reading,
         /// The model's roots.
@@ -174,9 +181,16 @@ fn run(command: Command, out: &mut dyn Write) -> Result<bool> {
         Command::Verify {
             all,
             algorithms,
+            expect,
             reading,
             roots,
-        } => verify(&open(&roots)?, all, &algorithms, &reading, out),
+        } => {
+            let model = open(&roots)?;
+            match expect {
+                None => verify(&model, all, &algorithms, &reading, out),
+                Some(id) => verify_expecting(&model, content_id_of(&id)?, &reading, out),
+            }
+        }
         Command::Hash(command) => hash(command, out),
         Command::Split {
             max_part_size,
@@ -234,9 +248,7 @@ fn hash(command: HashCommand, out: &mut dyn Write) -> Result<bool> {
     } = command;
     let algorithm = algorithm_of(&algorithm)?;
     let vouch = match (expect, trust_files) {
-        (Some(id), _) => Some(Vouch::ContentId(ContentId::from_hex(&id).ok_or_else(
-            || anyhow!("{id:?} isn't a content id, 128 lowercase hex digits"),
-        )?)),
+        (Some(id), _) => Some(Vouch::ContentId(content_id_of(&id)?)),
         (None, true) => Some(Vouch::Files),
         (None, false) => None,
     };
@@ -309,6 +321,11 @@ fn algorithm_of(id: &str) -> Result<Algorithm> {
     })
 }
 
+fn content_id_of(id: &str) -> Result<ContentId> {
+    ContentId::from_hex(id)
+        .ok_or_else(|| anyhow!("{id:?} isn't a content id, 128 lowercase hex digits"))
+}
+
 // A model with no table to check its files against: how it gets one.
 fn with_first_table_hint(error: anyhow::Error) -> anyhow::Error {
     if matches!(
@@ -371,8 +388,77 @@ fn verify(
     let mismatches = model.verify(&algorithms, reading.mode(), reading.threads, &|n| {
         bytes.fetch_add(n, Ordering::Relaxed);
     })?;
-    let seconds = start.elapsed().as_secs_f64();
-    for mismatch in &mismatches {
+    report(
+        model,
+        &algorithms,
+        &mismatches,
+        bytes.into_inner(),
+        start.elapsed().as_secs_f64(),
+        out,
+    )?;
+    if let (true, Some(id)) = (
+        mismatches.is_empty() && algorithms.contains(&Algorithm::Sha3),
+        model.content_id(),
+    ) {
+        writeln!(
+            out,
+            "content id {id}: the files', as the sha3-512 table matches them; authentic if a \
+             source you trust names it, which verify --expect checks"
+        )?;
+    }
+    Ok(mismatches.is_empty())
+}
+
+// Checks that `model` is the one of the content id `expected`.
+fn verify_expecting(
+    model: &Model,
+    expected: ContentId,
+    reading: &Reading,
+    out: &mut dyn Write,
+) -> Result<bool> {
+    let bytes = AtomicU64::new(0);
+    let start = Instant::now();
+    let mismatches = match model.verify_expecting(expected, reading.mode(), reading.threads, &|n| {
+        bytes.fetch_add(n, Ordering::Relaxed);
+    }) {
+        Ok(mismatches) => mismatches,
+        Err(furymodel::Error::ContentIdDiffers { found, .. }) => {
+            writeln!(
+                out,
+                "content id {found}: the sha3-512 table's, not the {expected} expected"
+            )?;
+            return Ok(false);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    report(
+        model,
+        &model.install_check(),
+        &mismatches,
+        bytes.into_inner(),
+        start.elapsed().as_secs_f64(),
+        out,
+    )?;
+    if mismatches.is_empty() {
+        writeln!(
+            out,
+            "content id {expected}: authentic, the one expected, as the sha3-512 table matches \
+             the files"
+        )?;
+    }
+    Ok(mismatches.is_empty())
+}
+
+// What a verification found: the mismatches, then how much was read.
+fn report(
+    model: &Model,
+    algorithms: &[Algorithm],
+    mismatches: &[Mismatch],
+    bytes: u64,
+    seconds: f64,
+    out: &mut dyn Write,
+) -> Result<()> {
+    for mismatch in mismatches {
         let chunk = mismatch
             .chunk
             .map_or_else(String::new, |chunk| format!(", chunk {chunk}"));
@@ -383,7 +469,6 @@ fn verify(
             mismatch.algorithm
         )?;
     }
-    let bytes = bytes.into_inner();
     let names: Vec<&str> = algorithms.iter().map(|algorithm| algorithm.id()).collect();
     writeln!(
         out,
@@ -398,17 +483,7 @@ fn verify(
             format!("{} mismatches", mismatches.len())
         }
     )?;
-    if let (true, Some(id)) = (
-        mismatches.is_empty() && algorithms.contains(&Algorithm::Sha3),
-        model.content_id(),
-    ) {
-        writeln!(
-            out,
-            "content id {id}: the files', as the sha3-512 table matches them; authentic if a \
-             source you trust names it"
-        )?;
-    }
-    Ok(mismatches.is_empty())
+    Ok(())
 }
 
 #[allow(
@@ -518,7 +593,7 @@ fn info(model: &Model, out: &mut dyn Write) -> io::Result<()> {
         "content id",
         &model.content_id().map_or_else(
             || "unknown: the model has no sha3-512 table".to_owned(),
-            |id| format!("{id}, as the sha3-512 table claims"),
+            |id| format!("{id}, as the sha3-512 table claims (verify --expect checks it)"),
         ),
     )?;
     let payloads = table

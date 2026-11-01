@@ -252,6 +252,37 @@ fn hash_add_into_parts_names_the_others() {
     );
 }
 
+// verify --expect checks that the model is the one of a content id, in one
+// pass; info shows the id as what the sha3-512 table claims.
+#[test]
+fn verify_expect_names_the_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = dir.path().join("model");
+    write_model(&model, 5);
+    let model = model.to_str().unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(&run(&["info", "--json", model]).stdout).unwrap();
+    let content_id = json["content_id"].as_str().unwrap().to_owned();
+    let output = run(&["info", model]);
+    assert!(
+        text(&output).contains("as the sha3-512 table claims"),
+        "{}",
+        text(&output)
+    );
+    let output = run(&["verify", "--expect", &content_id, model]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        text(&output).contains("authentic, the one expected"),
+        "{}",
+        text(&output)
+    );
+    let output = run(&["verify", "--expect", &"0".repeat(128), model]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(text(&output).contains("not the"), "{}", text(&output));
+    let output = run(&["verify", "--expect", &content_id, "--all", model]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+}
+
 #[test]
 fn info_escapes_control_characters() {
     let dir = tempfile::tempdir().unwrap();
