@@ -6,7 +6,7 @@ resolver = "3"
 members = ["crates/furymodel", "crates/furymodel-cli"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.0-alpha.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/infurer/furymodel"
@@ -19,7 +19,7 @@ rust-version = "1.95"
 anyhow = "1"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
-furymodel = { path = "crates/furymodel", version = "0.2.0" }
+furymodel = { path = "crates/furymodel", version = "0.2.0-alpha.1" }
 gxhash = "3"
 rustix = { version = "1", features = ["fs", "mm", "param"] }
 serde = { version = "1", features = ["derive"] }
