@@ -28,9 +28,15 @@
       ];
       text = builtins.readFile ./release.sh;
     };
+    # cargo publish builds every package before it uploads it, here and in
+    # its --check before a merge. Build scripts and blake3's C need a C
+    # compiler and linker: the builds' own, stdenv.cc, which every package
+    # and check here builds with. On macOS, Rust's standard library also
+    # links libiconv, which the SDK gives the builds.
     publish-releases = pkgs.writeShellApplication {
       name = "publish-releases";
       runtimeInputs = [
+        pkgs.stdenv.cc
         pkgs.coreutils
         pkgs.curl
         pkgs.gawk
@@ -43,7 +49,13 @@
       # No crate of ours among the dependencies: Cargo.lock is the one that
       # users get, and crates.io's copies build on the Linux runner, which
       # the publish's verification does.
-      runtimeEnv.PUBLISH_FLAGS = "--locked";
+      runtimeEnv =
+        {
+          PUBLISH_FLAGS = "--locked";
+        }
+        // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+          LIBRARY_PATH = "${pkgs.libiconv}/lib";
+        };
       text = builtins.readFile ./publish-releases.sh;
     };
   in {
@@ -56,7 +68,7 @@
       publish-releases = {
         type = "app";
         program = pkgs.lib.getExe publish-releases;
-        meta.description = "Push the release tags merged into master to GitHub, and publish their crates";
+        meta.description = "Push the release tags merged into master to GitHub, and publish their crates (--check: all but the upload)";
       };
     };
 

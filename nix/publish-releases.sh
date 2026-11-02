@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Mika Tammi
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
-# publish-releases [--dry-run] [--skip-crates]
+# publish-releases [--check] [--skip-crates]
 #
 # Master's pipeline, its release job: every release tag vVERSION merged into
 # HEAD and not released yet, oldest first, is checked, pushed to GitHub, and
@@ -18,20 +18,22 @@
 # CARGO_REGISTRY_TOKEN. PUBLISH_FLAGS are the repository's flags for cargo
 # publish (release.nix).
 #
-# --dry-run, in a checkout: package the crates and build them from their
-# packages, as crates.io would get them, without tags or uploads.
-# --skip-crates is for the tests: everything but cargo publish.
+# --check, in any checkout: what a release of the checkout's crates would
+# do, short of the upload. cargo publish --dry-run packages them and builds
+# them from their packages, in this script's environment, the release
+# job's; CI runs it before every merge. --skip-crates is for the tests:
+# everything but cargo publish.
 
 usage() {
-  echo "usage: publish-releases [--dry-run] [--skip-crates]" >&2
+  echo "usage: publish-releases [--check] [--skip-crates]" >&2
 }
 
-dry_run=0
+check=0
 skip_crates=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
-  --dry-run)
-    dry_run=1
+  --check)
+    check=1
     shift
     ;;
   --skip-crates)
@@ -90,7 +92,7 @@ index_versions() {
   rm -f "$body"
 }
 
-if [ "$dry_run" = 1 ]; then
+if [ "$check" = 1 ]; then
   excludes=()
   while IFS= read -r name; do
     excludes+=(--exclude "$name")

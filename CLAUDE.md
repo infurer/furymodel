@@ -73,7 +73,7 @@ nix fmt && git diff --exit-code &&
 ```sh
 nix run .#release -- 0.2.0-alpha.2     # Mika: the release commit and tag
 nix run .#release -- --abort 0.2.0-alpha.2
-nix run .#publish-releases -- --dry-run   # package and build as crates.io would
+nix run .#publish-releases -- --check     # a release short of the upload
 ```
 
 Versions go alpha.N, beta.N, rc.N, then the release, and change only in a
@@ -127,7 +127,9 @@ particular to this one is in `nix/release.nix`.
   `nix flake check --all-systems`, which builds x86_64-linux's checks;
   `packages` builds the packages of x86_64-linux and aarch64-linux, listed
   by hand, and so runs clippy and the tests on both; `cargo` runs `cargo build` inside `nix develop`, the build
-  outside Nix; `publish-github`, on master once those passed, pushes master
+  outside Nix; `publish-check` runs `nix run .#publish-releases -- --check`,
+  the release job's script short of the upload, so that crates that
+  couldn't be published don't merge; `publish-github`, on master once those passed, pushes master
   to the public GitHub repository; `release` then releases the release tags
   merged into master (`nix run .#publish-releases`): each must be signed
   with the release signing key and name its commit's version, and goes to

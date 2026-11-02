@@ -33,6 +33,15 @@ packages:
   interruptible: true
   script:
     - nix build --no-link --no-update-lock-file -L .#packages.x86_64-linux.furymodel-cli .#packages.aarch64-linux.furymodel-cli
+# The crates as a release would publish them, short of the upload: the
+# release job's own script packages them and builds them from their
+# packages (nix run .#publish-releases -- --check), so that a merge request
+# whose crates couldn't be published doesn't merge.
+publish-check:
+  stage: ci
+  interruptible: true
+  script:
+    - nix run --no-update-lock-file .#publish-releases -- --check
 # The build outside Nix: cargo in the dev shell, with the dependencies from
 # crates.io, as a user of the crate builds it.
 cargo:
