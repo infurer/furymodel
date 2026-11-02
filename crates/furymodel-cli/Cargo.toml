@@ -4,6 +4,9 @@
 [package]
 name = "furymodel-cli"
 description = "Describe, verify, extend, split and compare FuryModel models"
+readme = "README.md"
+keywords = ["llm", "machine-learning", "model-format", "inference", "cli"]
+categories = ["command-line-utilities", "science"]
 version.workspace = true
 edition.workspace = true
 license.workspace = true

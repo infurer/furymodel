@@ -81,6 +81,9 @@ nix fmt && git diff --exit-code &&
   sections (the crate documentation lists them), with the tests' fixture
   model in `src/testing.rs`; `crates/furymodel-cli`: the command line tool
   (info, verify, hash add, split, diff), tested end to end in `tests/`.
+  Each crate's `README.md` is its page on crates.io, and its `LICENSE-MIT`
+  and `LICENSE-APACHE` are links into `LICENSES/`, which cargo packages as
+  the files themselves.
 - `rust-toolchain.toml`: rust-overlay's stable as of `flake.lock`;
   `clippy.toml`: the disallowed macros and methods; `.cargo/config.toml`:
   AES instructions for the Linux targets, which gxhash needs at compile
