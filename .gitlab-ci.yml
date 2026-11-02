@@ -1,14 +1,35 @@
 # SPDX-FileCopyrightText: 2026 Mika Tammi
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
-# GitLab CI on x86_64-linux runners: on master, a push to the public GitHub
-# repository.
+# GitLab CI on x86_64-linux runners: the flake's checks, its packages, the
+# build outside Nix, and on master a push to the public GitHub repository.
 stages:
   - ci
   - publish
+# Every system evaluated, x86_64-linux's checks built. The other systems'
+# checks are built before every commit (CLAUDE.md).
+checks:
+  stage: ci
+  interruptible: true
+  script:
+    - nix flake check --all-systems --no-update-lock-file -L
+# The packages, listed by hand: x86_64-linux's built on the runner,
+# aarch64-linux's on its remote builder, each checked as it is built, with
+# clippy and the tests a build in the Nix sandbox can run.
+packages:
+  stage: ci
+  interruptible: true
+  script:
+    - nix build --no-link --no-update-lock-file -L .#packages.x86_64-linux.furymodel-cli .#packages.aarch64-linux.furymodel-cli
+# The build outside Nix: cargo in the dev shell, with the dependencies from
+# crates.io, as a user of the crate builds it.
+cargo:
+  stage: ci
+  interruptible: true
+  script:
+    - nix develop --no-update-lock-file --command cargo build --workspace --locked
 # Pushes master to the public GitHub repository, in the publish stage, so
-# only after the ci stage passed: a broken master never reaches GitHub. The
-# ci stage gets its jobs with the repository's first checks.
+# only after the ci stage passed: a broken master never reaches GitHub.
 #
 # GITHUB_DEPLOY_KEY_B64 is a masked, protected CI variable holding the
 # base64 of an ed25519 private key whose public half is a deploy key with

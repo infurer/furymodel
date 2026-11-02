@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: 2026 Mika Tammi
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[workspace]
+resolver = "3"
+members = ["crates/furymodel", "crates/furymodel-cli"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/infurer/furymodel"
+authors = ["Mika Tammi <mikatammi@gmail.com>"]
+# nixos-26.05's rustc, so that a nixpkgs build with its own compiler
+# satisfies it. The flake builds with rust-overlay's newer stable.
+rust-version = "1.95"
+
+[workspace.dependencies]
+anyhow = "1"
+blake3 = "1"
+clap = { version = "4", features = ["derive"] }
+furymodel = { path = "crates/furymodel", version = "0.2.0" }
+gxhash = "3"
+rustix = { version = "1", features = ["fs", "mm", "param"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+sha3 = "0.12"
+tempfile = "3"
+thiserror = "2"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "deny"

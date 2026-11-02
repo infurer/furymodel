@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Mika Tammi
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# gxhash needs AES (and SSE2 or NEON) at compile time. Apple's aarch64 target
+# has them already; the Linux targets get them here, so that this
+# repository's builds and tests cover gxhash3-128 on every system. Its
+# binaries still run on a CPU without AES instructions: the library asks the
+# CPU at run time, and verifies with xxh3-128 there. Crates depending on
+# furymodel decide for themselves: built without the features, the library
+# leaves gxhash3-128 out and verifies with xxh3-128, which checks.nix's
+# nextest-portable tests.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-feature=+aes,+sse2"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "target-feature=+aes,+neon"]

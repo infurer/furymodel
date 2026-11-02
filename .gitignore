@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Mika Tammi
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Nix build outputs
+result
+result-*
+
+# Cargo's build directory
+target/
+
+# Local Claude Code state
+.claude/
