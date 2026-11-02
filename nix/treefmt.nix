@@ -15,6 +15,7 @@
       programs = {
         alejandra.enable = true;
         deadnix.enable = true;
+        shfmt.enable = true;
         statix.enable = true;
         taplo.enable = true;
         # The toolchain's own rustfmt, so `nix fmt` and `cargo fmt` agree.

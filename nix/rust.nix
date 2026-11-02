@@ -14,10 +14,12 @@
     };
     rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ../rust-toolchain.toml;
     craneLib = (inputs.crane.mkLib pkgs).overrideToolchain rustToolchain;
+    # The version, shared by the crates, which a release commit sets.
+    workspacePackage = (builtins.fromTOML (builtins.readFile ../Cargo.toml)).workspace.package;
     # nixpkgs' own rustc and cargo, which a nixpkgs build of the crates
     # uses: Cargo.toml's rust-version is theirs, or the check would test
     # another compiler than the MSRV.
-    msrv = (builtins.fromTOML (builtins.readFile ../Cargo.toml)).workspace.package.rust-version;
+    msrv = workspacePackage.rust-version;
     craneLibMsrv =
       if msrv == pkgs.lib.versions.majorMinor pkgs.rustc.version
       then inputs.crane.mkLib pkgs
@@ -34,7 +36,7 @@
     commonArgs = {
       inherit src;
       pname = "furymodel";
-      version = "0.2.0";
+      inherit (workspacePackage) version;
       strictDeps = true;
       # Read by a test (hash::tests), so that the checks fail if the build
       # loses gxhash3-128 where it should have it.

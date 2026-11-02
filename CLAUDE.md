@@ -68,6 +68,26 @@ nix fmt && git diff --exit-code &&
   done
 ```
 
+### Releasing
+
+```sh
+nix run .#release -- 0.2.0-alpha.2     # Mika: the release commit and tag
+nix run .#release -- --abort 0.2.0-alpha.2
+nix run .#publish-releases -- --dry-run   # package and build as crates.io would
+```
+
+Versions go alpha.N, beta.N, rc.N, then the release, and change only in a
+release commit, `<repo>: <version>`, the Rust convention: master keeps a
+version until the next release commit, so a `[patch]` of the crates from
+git still matches their dependents' requirements. `nix run .#release`
+makes that commit on origin/master in a worktree of its own, checks that it
+changes nothing but versions (instead of the per-commit gate, which master
+has passed), signs it and its tag `v<version>`, and pushes both to GitLab
+with a merge request set to merge when its pipeline passes. Once merged,
+master's pipeline pushes the tag to GitHub and publishes the crates. The
+scripts are the same in the project's other repositories; what is
+particular to this one is in `nix/release.nix`.
+
 ## Architecture
 
 - `crates/furymodel/SPEC.md`: the format's specification, normative, which
@@ -81,6 +101,9 @@ nix fmt && git diff --exit-code &&
   sections (the crate documentation lists them), with the tests' fixture
   model in `src/testing.rs`; `crates/furymodel-cli`: the command line tool
   (info, verify, hash add, split, diff), tested end to end in `tests/`.
+  Each crate's `README.md` is its page on crates.io, and its `LICENSE-MIT`
+  and `LICENSE-APACHE` are links into `LICENSES/`, which cargo packages as
+  the files themselves.
 - `rust-toolchain.toml`: rust-overlay's stable as of `flake.lock`;
   `clippy.toml`: the disallowed macros and methods; `.cargo/config.toml`:
   AES instructions for the Linux targets, which gxhash needs at compile
@@ -94,7 +117,10 @@ nix fmt && git diff --exit-code &&
   instructions, `msrv`: every target built with nixpkgs' own rustc and
   cargo, `reuse lint`), `package.nix` (`packages.furymodel-cli`, the
   default, whose check runs clippy with warnings as errors and nextest),
-  `devshell.nix` and `treefmt.nix` (`nix fmt` and `checks.treefmt`).
+  `devshell.nix`, `treefmt.nix` (`nix fmt` and `checks.treefmt`), and
+  `release.nix`: the `release` and `publish-releases` apps (`release.sh`,
+  `publish-releases.sh`) and `checks.release`, which runs both against
+  throwaway repositories and keys (`release-test.nix`).
 - `.config/nextest.toml`: the leak timeout on macOS, and the `sandbox`
   profile that the checks and the package's check run.
 - `.gitlab-ci.yml`: GitLab CI on x86_64-linux runners. `checks` runs
@@ -102,7 +128,10 @@ nix fmt && git diff --exit-code &&
   `packages` builds the packages of x86_64-linux and aarch64-linux, listed
   by hand, and so runs clippy and the tests on both; `cargo` runs `cargo build` inside `nix develop`, the build
   outside Nix; `publish-github`, on master once those passed, pushes master
-  to the public GitHub repository.
+  to the public GitHub repository; `release` then releases the release tags
+  merged into master (`nix run .#publish-releases`): each must be signed
+  with the release signing key and name its commit's version, and goes to
+  GitHub, its crates to crates.io. Tags get no pipeline of their own.
 
 ## Conventions
 
@@ -136,7 +165,8 @@ nix fmt && git diff --exit-code &&
   the AI assistant that helped, such as `Assisted-by: Claude Opus 5.5`,
   directly above the Signed-off-by. No other trailers.
 - `flake.lock` changes only together with the input change that needs them.
-- Every commit passes the per-commit gate (see Commands).
+- Every commit passes the per-commit gate (see Commands), but a release
+  commit, which changes only versions and `nix run .#release` checks.
 - Corrections to earlier commits go in as `git commit --fixup=<commit>` (or
   `--squash`) and are autosquashed before the merge request.
 - v0.2 work happens on `initialv02` and reaches master through merge

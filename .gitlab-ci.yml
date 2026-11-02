@@ -2,10 +2,22 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
 # GitLab CI on x86_64-linux runners: the flake's checks, its packages, the
-# build outside Nix, and on master a push to the public GitHub repository.
+# build outside Nix, and on master a push to the public GitHub repository
+# and the release of the release tags merged into it.
 stages:
   - ci
   - publish
+  - release
+# Branch pipelines only. A release tag reaches GitLab with its merge
+# request (nix/release.sh), and master's pipeline releases it once that is
+# merged, so tags get no pipeline of their own.
+workflow:
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: never
+    - when: always
 # Every system evaluated, x86_64-linux's checks built. The other systems'
 # checks are built before every commit (CLAUDE.md).
 checks:
@@ -28,34 +40,58 @@ cargo:
   interruptible: true
   script:
     - nix develop --no-update-lock-file --command cargo build --workspace --locked
-# Pushes master to the public GitHub repository, in the publish stage, so
-# only after the ci stage passed: a broken master never reaches GitHub.
+# The public GitHub repository over ssh, for the jobs that push to it.
 #
 # GITHUB_DEPLOY_KEY_B64 is a masked, protected CI variable holding the
 # base64 of an ed25519 private key whose public half is a deploy key with
 # write access on the GitHub repository. The remote and GitHub's host key
 # are public, so they belong in this file, which is mirrored too.
-publish-github:
-  stage: publish
-  interruptible: false
-  resource_group: github-mirror
+.github:
   variables:
     GIT_DEPTH: "0"
     GITHUB_REMOTE: "git@github.com:infurer/furymodel.git"
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "master"'
-  script:
+  before_script:
     - install -d -m700 "$HOME/.github-mirror"
     - printf '%s' "$GITHUB_DEPLOY_KEY_B64" | base64 -d > "$HOME/.github-mirror/key"
     - chmod 600 "$HOME/.github-mirror/key"
     # GitHub's published ed25519 host key; refresh it from
     # https://api.github.com/meta.
     - echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > "$HOME/.github-mirror/known_hosts"
-    # The runner fetches only the pipeline's ref: without this, there are
-    # no tags, and --tags below pushes none.
-    - git fetch --no-recurse-submodules origin '+refs/tags/*:refs/tags/*'
-    # refs/heads/ spelled out: the runner pushes a detached HEAD, at first
-    # into an empty repository, so git can infer neither side's ref type.
-    - git -c core.sshCommand="ssh -i $HOME/.github-mirror/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.github-mirror/known_hosts -o StrictHostKeyChecking=yes" push "$GITHUB_REMOTE" HEAD:refs/heads/master --tags
+    - export GITHUB_SSH_COMMAND="ssh -i $HOME/.github-mirror/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.github-mirror/known_hosts -o StrictHostKeyChecking=yes"
   after_script:
     - rm -rf "$HOME/.github-mirror"
+# Pushes master to the public GitHub repository, in the publish stage, so
+# only after the ci stage passed: a broken master never reaches GitHub. Tags
+# go only through the release job, once checked.
+publish-github:
+  extends: .github
+  stage: publish
+  interruptible: false
+  resource_group: github-mirror
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'
+  script:
+    # refs/heads/ spelled out: the runner pushes a detached HEAD, at first
+    # into an empty repository, so git can infer neither side's ref type.
+    - git -c core.sshCommand="$GITHUB_SSH_COMMAND" push "$GITHUB_REMOTE" HEAD:refs/heads/master
+# Releases the release tags merged into master, after master reached
+# GitHub: each is checked against the release signing key and its commit's
+# version, pushed to GitHub, and its commit's crates are published to
+# crates.io (nix/publish-releases.sh). A run after a failure carries on
+# where the last one stopped, and one with nothing to release does nothing.
+#
+# CARGO_REGISTRY_TOKEN is a masked, protected CI variable holding a
+# crates.io API token that may publish this repository's crates.
+# RELEASE_SIGNING_KEY is a protected file variable holding the public key
+# whose fingerprint is RELEASE_SIGNER, the key release tags are signed with.
+release:
+  extends: .github
+  stage: release
+  interruptible: false
+  resource_group: release
+  variables:
+    RELEASE_SIGNER: "3606AD2B342F70B3B306E724BF5BDF55A9735223"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'
+  script:
+    - nix run --no-update-lock-file .#publish-releases

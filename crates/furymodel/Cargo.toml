@@ -4,6 +4,9 @@
 [package]
 name = "furymodel"
 description = "FuryModel: a model file format laid out for streaming layers and experts from disk"
+readme = "README.md"
+keywords = ["llm", "machine-learning", "model-format", "inference", "direct-io"]
+categories = ["encoding", "filesystem", "science"]
 version.workspace = true
 edition.workspace = true
 license.workspace = true
