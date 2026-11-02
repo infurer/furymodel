@@ -756,11 +756,19 @@ fn write_file(
 /// has its name.
 pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
     place_new(path, |file, partial| file.write_all(bytes).at(partial))?;
-    sync_dir(
-        path.parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or(Path::new(".")),
-    )
+    sync_dir(directory_of(path))
+}
+
+/// Replaces the file `path` with `bytes` whole and durably, or leaves it as
+/// it is: they are written as [`write_new`] writes them, into a file of
+/// this write's own, which is then renamed over `path`.
+pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    place(
+        path,
+        |file, partial| file.write_all(bytes).at(partial),
+        rename_over,
+    )?;
+    sync_dir(directory_of(path))
 }
 
 /// Puts the new file `path` in place whole and durably, or not at all, as
@@ -771,8 +779,18 @@ pub(crate) fn place_new(
     path: &Path,
     contents: impl FnOnce(&mut File, &Path) -> Result<()>,
 ) -> Result<()> {
+    place(path, contents, rename_new)
+}
+
+// `contents` writes the file into one of this write's own, which is synced
+// and given `path`'s name by `rename`, and removed if any of that fails.
+fn place(
+    path: &Path,
+    contents: impl FnOnce(&mut File, &Path) -> Result<()>,
+    rename: fn(&Path, &Path) -> Result<()>,
+) -> Result<()> {
     let (partial, file) = create_partial(path)?;
-    let placed = fill_and_rename(file, &partial, path, contents);
+    let placed = fill_and_rename(file, &partial, path, contents, rename);
     if placed.is_err() {
         // This write's own file, which no other write has: the attempt is
         // all that removing it can fail.
@@ -821,11 +839,12 @@ fn fill_and_rename(
     partial: &Path,
     path: &Path,
     contents: impl FnOnce(&mut File, &Path) -> Result<()>,
+    rename: fn(&Path, &Path) -> Result<()>,
 ) -> Result<()> {
     contents(&mut file, partial)?;
     file.sync_all().at(partial)?;
     drop(file);
-    rename_new(partial, path)
+    rename(partial, path)
 }
 
 // Renames `from` to `to` if no file has `to`'s name: a new hard link fails
@@ -844,6 +863,18 @@ fn rename_new(from: &Path, to: &Path) -> Result<()> {
             source,
         }),
     }
+}
+
+// Renames `from` to `to`, over the file that has `to`'s name.
+fn rename_over(from: &Path, to: &Path) -> Result<()> {
+    fs::rename(from, to).at(to)
+}
+
+// The directory that holds `path`.
+fn directory_of(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
 }
 
 /// Makes a directory's entries durable.

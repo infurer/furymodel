@@ -14,12 +14,12 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::error::{Error, IoContext as _, Result};
 use crate::hash::{
-    Algorithm, CHUNK_SIZE, ContentId, FileDigests, FileHasher, HashTable, chunk_count,
+    Algorithm, CHUNK_SIZE, ContentId, FileDigests, FileHasher, HashTable, TableError, chunk_count,
 };
 use crate::io::{AlignedBuf, CacheMode, DIRECT_ALIGNMENT, ReadFile};
 use crate::manifest::{EntryKind, FileTable, HASHES_DIR, MANIFEST_PATH, Manifest, PART_PATH};
 use crate::part::Part;
-use crate::writer::{sync_dir, write_new};
+use crate::writer::{replace_file, sync_dir, write_new};
 
 /// A complete model, opened from one or more roots.
 #[derive(Debug)]
@@ -60,6 +60,20 @@ pub struct Mismatch {
     pub chunk: Option<u64>,
 }
 
+/// What [`Model::replace_table`] replaced, and what keeps the model from
+/// opening still.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct Replaced {
+    /// The table's files, one in every root that held one, which now hold
+    /// the new table.
+    pub paths: Vec<PathBuf>,
+    /// Every other table that keeps the model from opening, left out of the
+    /// replacement, as the error opening gives for it: [`Error::HashTable`]
+    /// or [`Error::TablesDiffer`].
+    pub others: Vec<Error>,
+}
+
 impl Model {
     /// Opens the model whose roots are `roots`, in the order files are read
     /// from them. Checks the manifests, that the model is complete, and its
@@ -67,7 +81,7 @@ impl Model {
     ///
     /// Every hash table must be valid, whichever it is: a model with one
     /// that isn't doesn't open, even when it is a table that reads never
-    /// use.
+    /// use. [`Model::replace_table`] replaces such a table.
     ///
     /// # Errors
     ///
@@ -78,7 +92,7 @@ impl Model {
     /// between roots, the model has no table this build can compute
     /// ([`Error::Unverifiable`]), or the manifest doesn't match its digest.
     pub fn open<P: AsRef<Path>>(roots: &[P]) -> Result<Self> {
-        let (model, manifest_bytes) = Self::gather(roots)?;
+        let (model, manifest_bytes, _) = Self::gather(roots, Tables::Valid)?;
         if !model
             .tables
             .iter()
@@ -125,7 +139,7 @@ impl Model {
         threads: usize,
         progress: &(dyn Fn(u64) + Sync),
     ) -> Result<PathBuf> {
-        let (mut model, manifest_bytes) = Self::gather(roots)?;
+        let (mut model, manifest_bytes, _) = Self::gather(roots, Tables::Valid)?;
         if model
             .tables
             .iter()
@@ -210,10 +224,143 @@ impl Model {
         Ok(path)
     }
 
+    /// Replaces the table of `algorithm` of the model whose roots are
+    /// `roots`, a table that keeps the model from opening: one that fails a
+    /// check of section 5.2 of the specification, or that differs between
+    /// roots. The new table is computed from the files as
+    /// [`Model::add_table`] computes one, every file checked against another
+    /// table of the model, and replaces the old one, whole or not at all, in
+    /// every root that holds it. Other tables that keep the model from
+    /// opening are left out, to be replaced in turn; [`Replaced`] names
+    /// them.
+    ///
+    /// `expected`, the model's content id from a source trusted for it,
+    /// vouches for a new sha3-512 table, which is written only if it gives
+    /// that id: as for a first table ([`Model::add_first_table`]), so that a
+    /// model with no other valid table this build can compute gets one, and
+    /// the others follow checked against it. With another table, the files
+    /// are checked against that table too.
+    ///
+    /// # Errors
+    ///
+    /// If no root holds a table of `algorithm`, it is valid and the same in
+    /// every root, or it is of a table format version newer than this build
+    /// reads, which is left for a build that reads it; if a content id
+    /// vouches for another table than sha3-512's, this build doesn't support
+    /// the algorithm, the model has no other valid table this build can
+    /// compute and no content id vouches ([`Error::Unverifiable`]), a file
+    /// doesn't match that table ([`Error::Mismatch`]), the files give
+    /// another content id than the one expected
+    /// ([`Error::ContentIdDiffers`]), parts name another, or opening, reading
+    /// or writing fails as in [`Model::open`].
+    pub fn replace_table<P: AsRef<Path>>(
+        roots: &[P],
+        algorithm: Algorithm,
+        expected: Option<ContentId>,
+        mode: CacheMode,
+        threads: usize,
+        progress: &(dyn Fn(u64) + Sync),
+    ) -> Result<Replaced> {
+        let (mut model, manifest_bytes, others) =
+            Self::gather(roots, Tables::Replacing(algorithm))?;
+        let copies = table_copies(&model.roots, algorithm)?;
+        let first = replaceable(&copies, algorithm, &model.table)?;
+        if expected.is_some() && algorithm != Algorithm::Sha3 {
+            return Err(Error::Usage(
+                "a content id vouches for the sha3-512 table it is computed from".to_owned(),
+            ));
+        }
+        let manifest = model
+            .table
+            .index_of(MANIFEST_PATH)
+            .ok_or_else(|| Error::Roots("the file table has no manifest".to_owned()))?;
+        let check = model
+            .verifier()
+            .ok()
+            .and_then(|algorithm| model.hash_table(algorithm))
+            .or_else(|| {
+                model
+                    .tables
+                    .iter()
+                    .find(|table| table.algorithm().is_supported())
+            });
+        let mut digests: Vec<FileDigests> = match (check, expected) {
+            (Some(check), _) => {
+                model.check_bytes(manifest, &manifest_bytes)?;
+                model
+                    .digests(
+                        &[algorithm, check.algorithm()],
+                        mode,
+                        threads,
+                        progress,
+                        Some(check),
+                    )?
+                    .into_iter()
+                    .map(|mut digests| digests.remove(0))
+                    .collect()
+            }
+            (None, Some(_)) => model
+                .digests(&[algorithm], mode, threads, progress, None)?
+                .into_iter()
+                .map(|mut digests| digests.remove(0))
+                .collect(),
+            (None, None) => {
+                return Err(Error::Unverifiable(format!(
+                    "it has no other valid table this build can compute to check a new \
+                     {algorithm} table against, and no content id vouches for a new sha3-512 \
+                     table"
+                )));
+            }
+        };
+        if check.is_none() {
+            // As for a first table: the manifest's of the bytes in hand,
+            // which the file table was built from.
+            let mut manifest_hasher = FileHasher::new(&[algorithm]).map_err(Error::NoTable)?;
+            manifest_hasher.update(&manifest_bytes);
+            digests[manifest] = manifest_hasher.finish().remove(0);
+        }
+        let table = HashTable::new(algorithm, &model.table, digests).map_err(|source| {
+            Error::HashTable {
+                path: first.to_path_buf(),
+                source,
+            }
+        })?;
+        if algorithm == Algorithm::Sha3 {
+            let found =
+                ContentId::compute(&model.table, &table).map_err(|source| Error::HashTable {
+                    path: first.to_path_buf(),
+                    source,
+                })?;
+            if let Some(expected) = expected
+                && found != expected
+            {
+                return Err(Error::ContentIdDiffers {
+                    expected: Box::new(expected),
+                    found: Box::new(found),
+                });
+            }
+            model.content_id = Some(found);
+        }
+        // Parts name the content id, which a sha3-512 table left out leaves
+        // unknown until it is replaced too.
+        if model.content_id.is_some() {
+            model.check_parts()?;
+        }
+        let encoded = table.encode();
+        for (path, _) in &copies {
+            replace_file(path, &encoded)?;
+        }
+        Ok(Replaced {
+            paths: copies.into_iter().map(|(path, _)| path).collect(),
+            others,
+        })
+    }
+
     // The model whose roots are `roots` as its files say, with the bytes of
-    // its manifest: complete, its manifests one and its tables valid for
-    // its file table, but nothing verified yet.
-    fn gather<P: AsRef<Path>>(roots: &[P]) -> Result<(Self, Vec<u8>)> {
+    // its manifest: complete, its manifests one and its tables as `wanted`
+    // asks, but nothing verified yet; and the errors of the tables left out
+    // other than the one replaced.
+    fn gather<P: AsRef<Path>>(roots: &[P], wanted: Tables) -> Result<(Self, Vec<u8>, Vec<Error>)> {
         let roots: Vec<PathBuf> = roots
             .iter()
             .map(|root| root.as_ref().to_path_buf())
@@ -241,7 +388,7 @@ impl Model {
         if !missing.is_empty() {
             return Err(incomplete(&table, &missing, &parts));
         }
-        let tables = read_tables(&roots, &table)?;
+        let (tables, left_out) = read_tables(&roots, &table, wanted)?;
         let content_id = tables
             .iter()
             .find(|table| table.algorithm() == Algorithm::Sha3)
@@ -260,7 +407,7 @@ impl Model {
             parts,
             content_id,
         };
-        Ok((model, manifest_bytes))
+        Ok((model, manifest_bytes, left_out))
     }
 
     // That every part is one of this model's, of its content id.
@@ -831,14 +978,41 @@ fn incomplete(table: &FileTable, missing: &[usize], parts: &[Part]) -> Error {
     }
 }
 
-// The model's hash tables, each read from every root that holds it and
-// checked (section 5.2).
-fn read_tables(roots: &[PathBuf], table: &FileTable) -> Result<Vec<HashTable>> {
+// Which hash tables a model is gathered with.
+#[derive(Debug, Clone, Copy)]
+enum Tables {
+    // Every table, each valid and the same in every root.
+    Valid,
+    // Those valid and the same in every root but the table of the
+    // algorithm, which is being replaced.
+    Replacing(Algorithm),
+}
+
+// The model's hash tables as `wanted` asks, each read from every root that
+// holds it and checked (section 5.2); and the errors of those left out
+// other than the one replaced.
+fn read_tables(
+    roots: &[PathBuf],
+    table: &FileTable,
+    wanted: Tables,
+) -> Result<(Vec<HashTable>, Vec<Error>)> {
     let mut tables = Vec::new();
+    let mut left_out = Vec::new();
     for algorithm in Algorithm::ALL {
-        tables.extend(read_table(roots, table, algorithm)?);
+        let read = match wanted {
+            Tables::Valid => read_table(roots, table, algorithm),
+            Tables::Replacing(replaced) if replaced == algorithm => continue,
+            Tables::Replacing(_) => match read_table(roots, table, algorithm) {
+                Err(error @ (Error::HashTable { .. } | Error::TablesDiffer { .. })) => {
+                    left_out.push(error);
+                    continue;
+                }
+                read => read,
+            },
+        };
+        tables.extend(read?);
     }
-    Ok(tables)
+    Ok((tables, left_out))
 }
 
 // The table of `algorithm`, if a root holds it: the same in every root
@@ -865,6 +1039,44 @@ fn read_table(
             path: first.clone(),
             source,
         })
+}
+
+// The first of `copies`, the files of the table of `algorithm` in a model's
+// roots, if the table keeps the model of file table `table` from opening
+// and this build may replace it: some root holds it, it isn't valid and the
+// same in every root, and no copy is of a newer table format version.
+fn replaceable<'a>(
+    copies: &'a [(PathBuf, Vec<u8>)],
+    algorithm: Algorithm,
+    table: &FileTable,
+) -> Result<&'a Path> {
+    let Some((first, bytes)) = copies.first() else {
+        return Err(Error::Usage(format!(
+            "the model has no {algorithm} table to replace: add it with Model::add_table"
+        )));
+    };
+    for (path, bytes) in copies {
+        if let Err(TableError {
+            newer_version: Some(version),
+            ..
+        }) = HashTable::decode(bytes, algorithm, table)
+        {
+            return Err(Error::Usage(format!(
+                "{} is a table of version {version}, newer than this build reads: it is left for \
+                 a build that reads it",
+                path.display()
+            )));
+        }
+    }
+    if copies.iter().all(|(_, other)| other == bytes)
+        && HashTable::decode(bytes, algorithm, table).is_ok()
+    {
+        return Err(Error::Usage(format!(
+            "the model's {algorithm} table is valid, and the same in every root: there's nothing \
+             to replace"
+        )));
+    }
+    Ok(first)
 }
 
 // The file of the table of `algorithm` in every root that holds one, with

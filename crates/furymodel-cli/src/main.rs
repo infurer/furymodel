@@ -107,14 +107,22 @@ enum HashCommand {
         /// The root the table goes into; by default the first.
         #[arg(long)]
         into: Option<PathBuf>,
-        /// For a model with no table to check its files against: its content
-        /// id, from a source trusted for it, which the sha3-512 table
-        /// computed from the files must give.
+        /// Replace the model's table of the algorithm, one that keeps the
+        /// model from opening, in every root that holds it: a table that is
+        /// corrupt, isn't the model's, or differs between roots. With
+        /// --expect, the sha3-512 table, for a model with no other valid
+        /// table to check it against.
+        #[arg(long, conflicts_with = "into")]
+        force: bool,
+        /// For a model with no table to check its files against, or with
+        /// --force for its sha3-512 table: its content id, from a source
+        /// trusted for it, which the sha3-512 table computed from the files
+        /// must give.
         #[arg(long, value_name = "CONTENT_ID", conflicts_with = "trust_files")]
         expect: Option<String>,
         /// For a model with no hash table at all: vouch for its files as they
         /// are, with nothing to check them against.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "force")]
         trust_files: bool,
         #[command(flatten)]
         reading: Reading,
@@ -241,12 +249,17 @@ fn hash(command: HashCommand, out: &mut dyn Write) -> Result<bool> {
     let HashCommand::Add {
         algorithm,
         into,
+        force,
         expect,
         trust_files,
         reading,
         roots,
     } = command;
     let algorithm = algorithm_of(&algorithm)?;
+    if force {
+        let expected = expect.as_deref().map(content_id_of).transpose()?;
+        return replace_table(algorithm, expected, &reading, &roots, out);
+    }
     let vouch = match (expect, trust_files) {
         (Some(id), _) => Some(Vouch::ContentId(content_id_of(&id)?)),
         (None, true) => Some(Vouch::Files),
@@ -279,7 +292,8 @@ fn hash(command: HashCommand, out: &mut dyn Write) -> Result<bool> {
                 reading.mode(),
                 reading.threads,
                 &|_| {},
-            )?;
+            )
+            .map_err(|error| with_replace_hint(error.into()))?;
             // It opens now, by the table it has.
             (path, open(&roots)?)
         }
@@ -301,14 +315,105 @@ fn hash(command: HashCommand, out: &mut dyn Write) -> Result<bool> {
     Ok(true)
 }
 
+// Replaces a table that keeps the model from opening, and names the tables
+// that keep it from opening still.
+fn replace_table(
+    algorithm: Algorithm,
+    expected: Option<ContentId>,
+    reading: &Reading,
+    roots: &[PathBuf],
+    out: &mut dyn Write,
+) -> Result<bool> {
+    let start = Instant::now();
+    let replaced = Model::replace_table(
+        roots,
+        algorithm,
+        expected,
+        reading.mode(),
+        reading.threads,
+        &|_| {},
+    )
+    .map_err(|error| {
+        if matches!(error, furymodel::Error::Unverifiable(_)) && expected.is_none() {
+            anyhow!(
+                "{error:#}; with the model's content id from a source you trust, `hash add \
+                 --force --expect CONTENT_ID sha3-512` replaces its sha3-512 table, and the \
+                 others then follow with --force"
+            )
+        } else {
+            error.into()
+        }
+    })?;
+    for path in &replaced.paths {
+        writeln!(out, "replaced {}", path.display())?;
+    }
+    writeln!(
+        out,
+        "the model's files hashed in {:.1} s",
+        start.elapsed().as_secs_f64()
+    )?;
+    if replaced.others.is_empty() {
+        open(roots)?;
+    }
+    for error in &replaced.others {
+        writeln!(
+            out,
+            "the model doesn't open yet: {}{}",
+            shown(&chained(error)),
+            replace_hint(error).unwrap_or_default()
+        )?;
+    }
+    Ok(true)
+}
+
 fn open(roots: &[PathBuf]) -> Result<Model> {
-    Model::open(roots).with_context(|| {
-        let roots: Vec<String> = roots
-            .iter()
-            .map(|root| root.display().to_string())
-            .collect();
-        format!("opening the model of {}", roots.join(", "))
-    })
+    Model::open(roots)
+        .with_context(|| {
+            let roots: Vec<String> = roots
+                .iter()
+                .map(|root| root.display().to_string())
+                .collect();
+            format!("opening the model of {}", roots.join(", "))
+        })
+        .map_err(with_replace_hint)
+}
+
+// A table that keeps the model from opening: how it is replaced.
+fn with_replace_hint(error: anyhow::Error) -> anyhow::Error {
+    match error
+        .downcast_ref::<furymodel::Error>()
+        .and_then(replace_hint)
+    {
+        Some(hint) => anyhow!("{error:#}{hint}"),
+        None => error,
+    }
+}
+
+// How a table that keeps the model from opening is replaced, if this build
+// can replace it.
+fn replace_hint(error: &furymodel::Error) -> Option<String> {
+    let algorithm = match error {
+        furymodel::Error::HashTable { source, .. } if source.newer_version.is_none() => {
+            source.algorithm
+        }
+        furymodel::Error::TablesDiffer { algorithm, .. } => *algorithm,
+        _ => return None,
+    };
+    Some(format!(
+        "; `hash add --force {algorithm}` replaces it with one computed from the model's files"
+    ))
+}
+
+// An error and its sources, as anyhow shows them with "{:#}".
+fn chained(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
 }
 
 fn algorithm_of(id: &str) -> Result<Algorithm> {

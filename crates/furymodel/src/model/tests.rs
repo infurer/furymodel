@@ -639,6 +639,148 @@ fn adds_tables_whole() {
     assert_eq!(left, 1);
 }
 
+// A table that keeps the model from opening is replaced in every root that
+// holds it by one computed from the files, checked against another table;
+// a valid table, a table no root holds and one of a newer version aren't.
+#[test]
+fn replaces_a_bad_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a");
+    write_tiny(&a, false);
+    let b = dir.path().join("b");
+    copy(&a, &b, |_| true);
+    let roots = [a.as_path(), b.as_path()];
+    let content_id = Model::open(&roots).unwrap().content_id();
+    let replace = |algorithm, expected| {
+        Model::replace_table(&roots, algorithm, expected, CacheMode::Bypass, 2, &|_| {})
+    };
+
+    let error = replace(Algorithm::Sha512, None).unwrap_err();
+    assert!(error.to_string().contains("nothing to replace"), "{error}");
+
+    // Each table, bad in one root and then in both.
+    for algorithm in algorithms() {
+        let paths = roots.map(|root| root.join(algorithm.table_path()));
+        let original = fs::read(&paths[0]).unwrap();
+        for bad in [&paths[..1], &paths[..]] {
+            for path in bad {
+                corrupt(path);
+            }
+            assert!(Model::open(&roots).is_err());
+            let replaced = replace(algorithm, None).unwrap();
+            assert_eq!(replaced.paths, paths);
+            assert!(replaced.others.is_empty(), "{:?}", replaced.others);
+            for path in &paths {
+                assert_eq!(fs::read(path).unwrap(), original, "{algorithm}");
+            }
+        }
+    }
+    assert_eq!(Model::open(&roots).unwrap().content_id(), content_id);
+
+    // Two bad tables, the content id's among them: each is replaced while
+    // the other is left out.
+    for algorithm in [Algorithm::Sha256, Algorithm::Sha3] {
+        for root in roots {
+            corrupt(&root.join(algorithm.table_path()));
+        }
+    }
+    let replaced = replace(Algorithm::Sha256, None).unwrap();
+    assert!(
+        matches!(
+            &replaced.others[..],
+            [Error::HashTable { source, .. }] if source.algorithm == Algorithm::Sha3
+        ),
+        "{:?}",
+        replaced.others
+    );
+    assert!(matches!(
+        Model::open(&roots),
+        Err(Error::HashTable { source, .. }) if source.algorithm == Algorithm::Sha3
+    ));
+    let replaced = replace(Algorithm::Sha3, None).unwrap();
+    assert!(replaced.others.is_empty(), "{:?}", replaced.others);
+    assert_eq!(Model::open(&roots).unwrap().content_id(), content_id);
+
+    // A payload changed behind the model's back: nothing is replaced.
+    let sha256 = a.join(Algorithm::Sha256.table_path());
+    let original = fs::read(&sha256).unwrap();
+    corrupt(&sha256);
+    let bad = fs::read(&sha256).unwrap();
+    let payload = a.join("layers/00/experts/01.bin");
+    let contents = fs::read(&payload).unwrap();
+    let mut changed = contents.clone();
+    changed[100] ^= 1;
+    fs::write(&payload, &changed).unwrap();
+    let error = replace(Algorithm::Sha256, None).unwrap_err();
+    assert!(matches!(error, Error::Mismatch { .. }), "{error:?}");
+    assert_eq!(fs::read(&sha256).unwrap(), bad);
+    fs::write(&payload, &contents).unwrap();
+
+    fs::write(&sha256, newer(&original)).unwrap();
+    let error = replace(Algorithm::Sha256, None).unwrap_err();
+    assert!(
+        error.to_string().contains("newer than this build"),
+        "{error}"
+    );
+    assert_eq!(fs::read(&sha256).unwrap(), newer(&original));
+    fs::write(&sha256, &original).unwrap();
+
+    for root in roots {
+        fs::remove_file(root.join(Algorithm::Blake3.table_path())).unwrap();
+    }
+    let error = replace(Algorithm::Blake3, None).unwrap_err();
+    assert!(error.to_string().contains("no blake3 table"), "{error}");
+    Model::open(&roots).unwrap();
+}
+
+// A model whose every table is bad has none to check a new one against: its
+// content id, from a source trusted for it, vouches for a new sha3-512
+// table, and the others follow, checked against it.
+#[test]
+fn replaces_every_bad_table_by_the_content_id() {
+    let dir = tempfile::tempdir().unwrap();
+    write_tiny(dir.path(), false);
+    let roots = [dir.path()];
+    let content_id = Model::open(&roots).unwrap().content_id().unwrap();
+    let replace = |algorithm, expected| {
+        Model::replace_table(&roots, algorithm, expected, CacheMode::Use, 2, &|_| {})
+    };
+    let originals: Vec<_> = algorithms()
+        .into_iter()
+        .map(|algorithm| {
+            let path = dir.path().join(algorithm.table_path());
+            let original = fs::read(&path).unwrap();
+            corrupt(&path);
+            (algorithm, path, original)
+        })
+        .collect();
+
+    let error = replace(Algorithm::Sha3, None).unwrap_err();
+    assert!(matches!(error, Error::Unverifiable(_)), "{error}");
+    let error = replace(Algorithm::Xxh3, Some(content_id)).unwrap_err();
+    assert!(error.to_string().contains("sha3-512 table"), "{error}");
+    let other = ContentId::from_hex(&"0".repeat(128)).unwrap();
+    let error = replace(Algorithm::Sha3, Some(other)).unwrap_err();
+    assert!(matches!(error, Error::ContentIdDiffers { .. }), "{error}");
+
+    let replaced = replace(Algorithm::Sha3, Some(content_id)).unwrap();
+    assert_eq!(replaced.others.len(), originals.len() - 1);
+    for (algorithm, path, original) in &originals {
+        if *algorithm != Algorithm::Sha3 {
+            replace(*algorithm, None).unwrap();
+        }
+        assert_eq!(fs::read(path).unwrap(), *original, "{algorithm}");
+    }
+    assert_eq!(Model::open(&roots).unwrap().content_id(), Some(content_id));
+
+    // With another valid table, the content id must hold as well.
+    corrupt(&dir.path().join(Algorithm::Sha3.table_path()));
+    let error = replace(Algorithm::Sha3, Some(other)).unwrap_err();
+    assert!(matches!(error, Error::ContentIdDiffers { .. }), "{error}");
+    replace(Algorithm::Sha3, Some(content_id)).unwrap();
+    Model::open(&roots).unwrap();
+}
+
 // Nothing of a model with no table this build can compute is used, the
 // manifest included.
 #[test]

@@ -33,6 +33,6 @@ pub use error::{Error, Result};
 pub use hash::{Algorithm, ContentId, HashTable};
 pub use io::CacheMode;
 pub use manifest::{FileTable, Manifest, ManifestError};
-pub use model::{Model, Reader, TensorLocation, Vouch};
+pub use model::{Model, Reader, Replaced, TensorLocation, Vouch};
 pub use registry::{Dtype, Layout, Scheme};
 pub use writer::Writer;

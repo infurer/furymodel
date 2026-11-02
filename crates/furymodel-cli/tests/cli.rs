@@ -213,6 +213,28 @@ fn hash_add_gives_a_model_without_tables_a_first_one() {
         lost,
     ]);
     assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    let output = run(&["hash", "add", "sha3-512", "--force", "--trust-files", lost]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(
+        text(&output).contains("cannot be used with"),
+        "{}",
+        text(&output)
+    );
+    let output = run(&[
+        "hash",
+        "add",
+        "sha3-512",
+        "--force",
+        "--expect",
+        &content_id,
+        lost,
+    ]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(
+        text(&output).contains("no sha3-512 table to replace"),
+        "{}",
+        text(&output)
+    );
 }
 
 // A table added to a model in parts goes into one part: hash add says the
@@ -250,6 +272,138 @@ fn hash_add_into_parts_names_the_others() {
         "{}",
         text(&output)
     );
+}
+
+// A table that keeps a model from opening, here one part's copy of it:
+// opening says that hash add --force replaces it, which it then does in
+// every part.
+#[test]
+fn hash_add_force_replaces_a_bad_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = dir.path().join("model");
+    write_model(&model, 5);
+    let parts = dir.path().join("parts");
+    let output = run(&[
+        "split",
+        "--max-part-size",
+        "4MiB",
+        "--out",
+        parts.to_str().unwrap(),
+        model.to_str().unwrap(),
+    ]);
+    assert!(output.status.success(), "{}", text(&output));
+    let mut roots: Vec<String> = std::fs::read_dir(&parts)
+        .unwrap()
+        .map(|entry| entry.unwrap().path().to_str().unwrap().to_owned())
+        .collect();
+    roots.sort();
+    assert!(roots.len() >= 2, "{roots:?}");
+    let table = Path::new(&roots[1]).join(Algorithm::Sha256.table_path());
+    let original = std::fs::read(&table).unwrap();
+    let mut bytes = original.clone();
+    bytes[200] ^= 1;
+    std::fs::write(&table, &bytes).unwrap();
+    let with_roots = |args: &[&str]| {
+        let mut args = args.to_vec();
+        args.extend(roots.iter().map(String::as_str));
+        run(&args)
+    };
+
+    let output = with_roots(&["info"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(
+        text(&output).contains("`hash add --force sha2-256` replaces"),
+        "{}",
+        text(&output)
+    );
+    let output = with_roots(&["hash", "add", "sha2-256"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    let output = with_roots(&["hash", "add", "--force", "sha2-256", "--into", &roots[0]]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    let output = with_roots(&["hash", "add", "--force", "sha2-256"]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(text(&output).contains("replaced"), "{}", text(&output));
+    assert_eq!(std::fs::read(&table).unwrap(), original);
+    let output = with_roots(&["verify", "--all"]);
+    assert!(output.status.success(), "{}", text(&output));
+    let output = with_roots(&["hash", "add", "--force", "sha2-256"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(
+        text(&output).contains("nothing to replace"),
+        "{}",
+        text(&output)
+    );
+}
+
+// Each of several bad tables is replaced in turn, every replacement a
+// success that names the tables that keep the model from opening still;
+// with every table bad, the model's content id vouches for a new sha3-512
+// table first.
+#[test]
+fn hash_add_force_replaces_bad_tables_in_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = dir.path().join("model");
+    write_model(&model, 6);
+    let model = model.to_str().unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(&run(&["info", "--json", model]).stdout).unwrap();
+    let content_id = json["content_id"].as_str().unwrap().to_owned();
+    let corrupt = |algorithm: Algorithm| {
+        let path = Path::new(model).join(algorithm.table_path());
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[200] ^= 1;
+        std::fs::write(&path, &bytes).unwrap();
+    };
+
+    corrupt(Algorithm::Sha256);
+    corrupt(Algorithm::Blake3);
+    let output = run(&["hash", "add", "--force", "sha2-256", model]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        text(&output).contains("the model doesn't open yet")
+            && text(&output).contains("`hash add --force blake3` replaces"),
+        "{}",
+        text(&output)
+    );
+    let output = run(&["hash", "add", "--force", "blake3", model]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(!text(&output).contains("doesn't open"), "{}", text(&output));
+
+    let algorithms = algorithms();
+    for &algorithm in &algorithms {
+        corrupt(algorithm);
+    }
+    let output = run(&["hash", "add", "--force", "sha3-512", model]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(
+        text(&output).contains("--force --expect CONTENT_ID sha3-512"),
+        "{}",
+        text(&output)
+    );
+    let output = run(&[
+        "hash",
+        "add",
+        "--force",
+        "--expect",
+        &content_id,
+        "sha3-512",
+        model,
+    ]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(
+        text(&output).matches("the model doesn't open yet").count(),
+        algorithms.len() - 1,
+        "{}",
+        text(&output)
+    );
+    for algorithm in algorithms.iter().filter(|&&a| a != Algorithm::Sha3) {
+        let output = run(&["hash", "add", "--force", algorithm.id(), model]);
+        assert!(output.status.success(), "{}", text(&output));
+    }
+    let output = run(&["verify", "--expect", &content_id, model]);
+    assert!(output.status.success(), "{}", text(&output));
+    let output = run(&["verify", "--all", model]);
+    assert!(output.status.success(), "{}", text(&output));
 }
 
 // verify --expect checks that the model is the one of a content id, in one
