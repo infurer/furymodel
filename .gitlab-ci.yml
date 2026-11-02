@@ -14,7 +14,8 @@ checks:
   script:
     - nix flake check --all-systems --no-update-lock-file -L
 # The packages, listed by hand: x86_64-linux's built on the runner,
-# aarch64-linux's on its remote builder.
+# aarch64-linux's on its remote builder, each checked as it is built, with
+# clippy and the tests a build in the Nix sandbox can run.
 packages:
   stage: ci
   interruptible: true

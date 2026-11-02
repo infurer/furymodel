@@ -10,3 +10,11 @@
 [[profile.default.overrides]]
 platform = { host = 'cfg(target_os = "macos")' }
 leak-timeout = "60s"
+
+# The tests a build in the Nix sandbox can run, which checks.nextest,
+# checks.nextest-portable and the package's check run: every test but those
+# that need what the sandbox lacks, such as a GPU or the network, which carry
+# `outside_sandbox` in their names. It inherits the default profile's
+# settings, the leak timeout among them.
+[profile.sandbox]
+default-filter = 'not test(/outside_sandbox/)'

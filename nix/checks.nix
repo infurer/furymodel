@@ -22,11 +22,12 @@
           cargoClippyExtraArgs = "--workspace --all-targets -- --deny warnings";
         });
 
-      # The tests.
+      # The tests a build in the Nix sandbox can run (nextest's sandbox
+      # profile).
       nextest = craneLib.cargoNextest (commonArgs
         // {
           inherit cargoArtifacts;
-          cargoNextestExtraArgs = "--workspace --no-tests=warn";
+          cargoNextestExtraArgs = "--workspace --profile sandbox --no-tests=warn";
         });
 
       # The tests again, built without AES instructions: no gxhash3-128, and
@@ -34,7 +35,7 @@
       nextest-portable = craneLib.cargoNextest (portableArgs
         // {
           cargoArtifacts = cargoArtifactsPortable;
-          cargoNextestExtraArgs = "--workspace --no-tests=warn";
+          cargoNextestExtraArgs = "--workspace --profile sandbox --no-tests=warn";
         });
 
       # Every target, the tests included, built with nixpkgs' own rustc

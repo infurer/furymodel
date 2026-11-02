@@ -43,6 +43,7 @@ nix develop                # rust-toolchain.toml's toolchain, cargo-nextest, reu
 nix build .#checks.aarch64-darwin.clippy   # warnings as errors
 nix build .#checks.aarch64-darwin.nextest
 nix build .#checks.aarch64-darwin.msrv     # nixpkgs' rustc and cargo
+nix build .#furymodel-cli                 # its check: clippy, the tests
 nix run .#furymodel-cli -- info ROOT...   # or verify, hash add, split, diff
 nix fmt
 nix flake check --all-systems --no-update-lock-file
@@ -53,16 +54,17 @@ too, with the dependencies from crates.io, as for a user of the crate
 outside Nix; CI's `cargo` job keeps it working.
 
 `nix flake check` evaluates every system but builds only the current
-system's checks. The per-commit gate builds them for all systems; on a Mac
-the Linux ones go to its remote builder. Flakes only see files git tracks,
-so `git add` new files first:
+system's checks. The per-commit gate builds every system's checks and
+packages; on a Mac the Linux ones go to its remote builder. Flakes only see
+files git tracks, so `git add` new files first:
 
 ```sh
 nix fmt && git diff --exit-code &&
   nix flake check --all-systems --no-update-lock-file &&
   for s in x86_64-linux aarch64-linux aarch64-darwin; do
     nix build --no-link --impure --expr \
-      "builtins.attrValues (builtins.getFlake \"git+file://$PWD\").checks.$s"
+      "let f = builtins.getFlake \"git+file://$PWD\";
+       in builtins.attrValues (f.checks.$s // f.packages.$s)"
   done
 ```
 
@@ -91,12 +93,14 @@ nix fmt && git diff --exit-code &&
   rustdoc with warnings as errors, nextest, nextest again built without AES
   instructions, `msrv`: every target built with nixpkgs' own rustc and
   cargo, `reuse lint`), `package.nix` (`packages.furymodel-cli`, the
-  default), `devshell.nix` and `treefmt.nix` (`nix fmt` and
-  `checks.treefmt`).
+  default, whose check runs clippy with warnings as errors and nextest),
+  `devshell.nix` and `treefmt.nix` (`nix fmt` and `checks.treefmt`).
+- `.config/nextest.toml`: the leak timeout on macOS, and the `sandbox`
+  profile that the checks and the package's check run.
 - `.gitlab-ci.yml`: GitLab CI on x86_64-linux runners. `checks` runs
   `nix flake check --all-systems`, which builds x86_64-linux's checks;
   `packages` builds the packages of x86_64-linux and aarch64-linux, listed
-  by hand; `cargo` runs `cargo build` inside `nix develop`, the build
+  by hand, and so runs clippy and the tests on both; `cargo` runs `cargo build` inside `nix develop`, the build
   outside Nix; `publish-github`, on master once those passed, pushes master
   to the public GitHub repository.
 
@@ -105,6 +109,9 @@ nix fmt && git diff --exit-code &&
 - Every file has SPDX copyright and license comments
   (`2026 Mika Tammi`, `MIT OR Apache-2.0`). Files that can't hold comments are
   annotated in `REUSE.toml`.
+- A test that needs what the Nix sandbox lacks, such as a GPU or the
+  network, carries `outside_sandbox` in its name: nextest's `sandbox`
+  profile, which every Nix build of the tests runs, leaves it out.
 - Every file type has a formatter in `nix/treefmt.nix`, enabled in the
   commit that adds the first file of that type. Rust is formatted by the
   toolchain's rustfmt, TOML by taplo.
